@@ -1,0 +1,1 @@
+"""Native Sentry integration support."""

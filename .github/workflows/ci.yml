@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Sentry 26.3.1's image runs Python 3.13; uv downloads it if the runner lacks it.
+  UV_PYTHON: "3.13"
+
+jobs:
+  lint-unit:
+    name: Lint and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format
+        run: uv run ruff format --check .
+
+      - name: Unit tests
+        run: uv run pytest tests/unit -q
+
+      # Host-only regression tests for the E2E harness (HTTP mocked; no stack needed).
+      - name: Harness tests
+        run: uv run pytest tests/e2e -m "not e2e" -q
+
+  sentry-level:
+    name: Sentry-level tests (sentry 26.3.1 image)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v6
+
+      # The harness runs with .venv/bin/python (needs requests) and builds the wheel with uv.
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Show Docker versions
+        run: |
+          docker version --format 'Docker {{.Server.Version}}'
+          docker compose version
+
+      - name: Pull test images
+        run: docker compose -p sentry-gitea-tests -f docker/test-sentry.compose.yml pull --quiet
+
+      # Same entry point as local development: builds the wheel, starts disposable
+      # Postgres + Redis, installs the wheel into ghcr.io/getsentry/sentry:26.3.1 and
+      # runs tests/sentry. .e2e/local.env is optional and absent here.
+      - name: Sentry-level tests
+        run: make sentry-tests SENTRY_TEST_WORKERS=2
+
+      - name: Clean up test services
+        if: always()
+        run: docker compose -p sentry-gitea-tests -f docker/test-sentry.compose.yml down --volumes --remove-orphans

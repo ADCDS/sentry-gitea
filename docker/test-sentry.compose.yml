@@ -1,0 +1,46 @@
+name: sentry-gitea-tests
+
+services:
+  postgres:
+    image: postgres:14.19-bookworm
+    environment:
+      # Isolated disposable test DB, with no published host ports.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  redis:
+    image: redis:6.2.20-alpine
+    command: [redis-server, --save, "", --appendonly, "no"]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  tests:
+    image: ghcr.io/getsentry/sentry:26.3.1
+    user: root
+    working_dir: /work
+    entrypoint: [/bin/bash, /work/docker/run-sentry-tests.sh]
+    # Sentry's pytest plugin hardcodes Redis's default host (localhost).
+    network_mode: service:redis
+    environment:
+      DATABASE_URL: postgres://postgres@postgres:5432/postgres
+      SENTRY_SKIP_SELENIUM_PLUGIN: "1"
+      SENTRY_SKIP_SERVICE_VALIDATION: "1"
+      SENTRY_TEST_WORKERS: ${SENTRY_TEST_WORKERS:-2}
+      PYTHONPATH: /work
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ..:/work:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy

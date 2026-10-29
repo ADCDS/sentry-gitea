@@ -1,0 +1,47 @@
+services:
+  gitea:
+    image: gitea/gitea:28.1.0
+    environment:
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__database__DB_TYPE: sqlite3
+      # Webhook egress: Gitea 28 needs an explicit IP/CIDR allow entry for a non-public
+      # target such as Sentry's web:9000 (a host name is not enough, "*" is rejected and
+      # [webhook] ALLOWED_HOST_LIST is deprecated). Allow only the exact subnet(s) of
+      # Sentry's Docker network, computed by `harness.py gitea-up` (docker network inspect).
+      # Never set GITEA__webhook__ALLOWED_HOST_LIST: an older value persisted in app.ini
+      # overrides this list, so gitea-up also removes that stale key from the volume.
+      GITEA__security__ALLOWED_HOST_LIST: ${SELF_HOSTED_SUBNETS:?Set SELF_HOSTED_SUBNETS or use the Makefile}
+      GITEA__security__EGRESS_MODE: lax
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__server__ROOT_URL: http://127.0.0.1:${GITEA_HTTP_PORT:-13000}/
+      # Short-lived JWTs make real OAuth refresh observable within a bounded E2E wait.
+      GITEA__oauth2__ACCESS_TOKEN_EXPIRATION_TIME: "90"
+      GITEA__oauth2__INVALIDATE_REFRESH_TOKENS: "false"
+      GITEA__server__DISABLE_SSH: "true"
+      # Pinned to the 28.1.0 default: the sync E2E pushes 7 commits to prove backfill.
+      GITEA__ui__FEED_MAX_COMMIT_NUM: "5"
+      # Allow a cold Sentry web worker to answer before Gitea marks a delivery failed.
+      GITEA__webhook__DELIVER_TIMEOUT: "20"
+    ports:
+      - "127.0.0.1:${GITEA_HTTP_PORT:-13000}:3000"
+    volumes:
+      - gitea-data:/data
+    networks:
+      sentry:
+        # gitea-unlisted: the same server under an origin that is NOT in Sentry's
+        # GITEA_PLUGIN_ALLOWED_BASE_URLS, for the plugin SSRF-guard E2E.
+        aliases: [gitea, gitea-unlisted]
+    healthcheck:
+      test: [CMD-SHELL, "wget -T 4 -q -O /dev/null http://127.0.0.1:3000/api/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
+      start_period: 20s
+
+networks:
+  sentry:
+    external: true
+    name: ${SELF_HOSTED_NETWORK:?Set SELF_HOSTED_NETWORK or use the Makefile}
+
+volumes:
+  gitea-data:

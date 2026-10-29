@@ -1,0 +1,24 @@
+sentry-gitea
+Copyright 2026 Adriel Santos and the sentry-gitea contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Portions of the issue rendering and classification logic (src/sentry_gitea/render.py)
+derive from the author's earlier private tooling. Its copyright holder, Adriel Santos,
+relicenses those portions under the Apache License, Version 2.0, as part of this project.
+
+Third-party code adapted into this project
+-------------------------------------------
+
+Code adapted from Sentry (https://github.com/getsentry/sentry) is taken ONLY from
+release 24.10.0, or from a release verified to be available under the Apache License,
+Version 2.0 (Sentry releases convert from FSL-1.1-Apache-2.0 to Apache-2.0 on their
+second anniversary; 24.10.0 was published 2024-10-17). Each adapted file is listed
+below with its upstream path.
+
+Adapted files:
+
+- tests/sentry/conftest.py — autouse test fixtures adapted from
+  sentry 24.10.0 tests/conftest.py (validate_silo_mode, setup_simulate_on_commit,
+  setup_enforce_monotonic_transactions, clear_caches, check_leaked_responses_mocks).
+  Copyright Functional Software, Inc. dba Sentry. Apache License 2.0.

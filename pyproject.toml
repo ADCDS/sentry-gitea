@@ -1,0 +1,79 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sentry-gitea"
+version = "0.1.0"
+description = "Gitea integration for self-hosted Sentry: issue plugins and an OAuth organization integration."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.12"
+authors = [{ name = "Adriel Santos" }]
+keywords = ["sentry", "gitea", "self-hosted", "integration", "plugin", "issue-tracking"]
+# No "License ::" classifier: PEP 639 license expressions (`license = "Apache-2.0"`) replace it.
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Plugins",
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Bug Tracking",
+    "Topic :: Software Development :: Version Control :: Git",
+    "Topic :: System :: Monitoring",
+]
+# Sentry itself is provided by the host image (it is not published on PyPI).
+dependencies = ["requests>=2.31", "urllib3>=2"]
+
+[project.urls]
+Homepage = "https://github.com/ADCDS/sentry-gitea"
+Repository = "https://github.com/ADCDS/sentry-gitea"
+Issues = "https://github.com/ADCDS/sentry-gitea/issues"
+Documentation = "https://github.com/ADCDS/sentry-gitea/tree/main/docs"
+Changelog = "https://github.com/ADCDS/sentry-gitea/releases"
+
+# Legacy Sentry plugins are discovered through this entry-point group
+# (sentry/runner/initializer.py: register_plugins).
+[project.entry-points."sentry.plugins"]
+gitea = "sentry_gitea.plugins.issue:GiteaIssuePlugin"
+gitea_alerts = "sentry_gitea.plugins.alerts:GiteaAlertsPlugin"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "responses>=0.23",
+    "ruff>=0.6",
+    "sentry-sdk>=2.73.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sentry_gitea"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+# Sentry is provided by the host image, never first-party here.
+known-third-party = ["sentry", "sentry_plugins"]
+known-first-party = ["sentry_gitea"]
+
+[tool.pytest.ini_options]
+# Host default: pure unit tests only. Sentry-level and E2E suites run in Docker.
+testpaths = ["tests/unit"]
+addopts = "-q"
+markers = [
+    "e2e: needs the real self-hosted Sentry + Gitea stack (tests/e2e)",
+    "snuba: Sentry test-case marker (Snuba is not used by our suites)",
+]
