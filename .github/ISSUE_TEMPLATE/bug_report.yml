@@ -22,7 +22,7 @@ body:
     attributes:
       label: Versions
       description: sentry-gitea version or commit, self-hosted Sentry version, Gitea version.
-      placeholder: "sentry-gitea 0.1.0, Sentry 26.3.1, Gitea 28.1.0"
+      placeholder: "sentry-gitea 0.2.0, Sentry 26.3.1, Gitea 28.1.0"
     validations:
       required: true
   - type: textarea

@@ -37,6 +37,9 @@ class EventData:
     culprit: str = ""
     handled: bool | None = None
     fingerprint: str = ""
+    # Set when this issue replaces a closed one the group was linked to (0.2.0 re-filing).
+    recurrence_of: str = ""
+    recurrence_closed: str = ""
 
     @property
     def dedup_id(self) -> str:
@@ -108,8 +111,13 @@ def render_title(event: EventData) -> str:
     return f"[{identifier}] {clean_text(event.title) or 'Sentry issue'}"[:255]
 
 
+def _recurrence_number(event: EventData) -> str:
+    value = str(event.recurrence_of or "")
+    return value if re.fullmatch(r"[1-9][0-9]{0,18}", value) else ""
+
+
 def render_metadata(event: EventData) -> str:
-    metadata = {
+    metadata: dict[str, Any] = {
         "source": "sentry",
         "dedup_id": event.dedup_id,
         "sentry_issue_url": event.issue_url,
@@ -119,6 +127,8 @@ def render_metadata(event: EventData) -> str:
         "class": map_class(event.handled),
         "release": resolve_release(event.release, event.first_release),
     }
+    if recurrence := _recurrence_number(event):
+        metadata["recurrence_of"] = recurrence
     # Keep valid JSON while preventing user text from terminating the HTML comment.
     encoded = (
         json.dumps(metadata, ensure_ascii=True).replace("<", "\\u003c").replace(">", "\\u003e")
@@ -157,9 +167,18 @@ def render_body(event: EventData) -> str:
     lines = [
         f"# {_field(event.title, 'Sentry issue')}",
         f"**Sentry issue:** <{_url(event.issue_url)}>",
-        f"**Level:** {_field(event.level)}",
-        f"**Release:** {_field(_release(event))}",
     ]
+    if recurrence := _recurrence_number(event):
+        # Digits only, so Gitea turns it into a cross-reference on the closed issue.
+        closed = event.recurrence_closed
+        when = f" (closed {closed})" if re.fullmatch(r"\d{4}-\d{2}-\d{2}", closed or "") else ""
+        lines.append(f"**Recurrence of:** #{recurrence}{when}")
+    lines.extend(
+        [
+            f"**Level:** {_field(event.level)}",
+            f"**Release:** {_field(_release(event))}",
+        ]
+    )
     if clean_text(event.environment):
         lines.append(f"**Environment:** {_field(event.environment)}")
     lines.extend(

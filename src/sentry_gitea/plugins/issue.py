@@ -92,6 +92,15 @@ def plugin_error(error: GiteaApiError) -> PluginError:
     return result
 
 
+def same_issue(link: Mapping[str, str] | None, other: Mapping[str, str] | None) -> bool:
+    return bool(
+        link
+        and other
+        and str(link.get("id")) == str(other.get("id"))
+        and str(link.get("repo_id")) == str(other.get("repo_id"))
+    )
+
+
 def blocked_address_error() -> PluginError:
     result = PluginError(BLOCKED_ADDRESS)
     result.status = 0
@@ -584,16 +593,30 @@ class GiteaIssuePlugin(FreshOptionsMixin, IssuePlugin2):
         assignees: list[str] | None = None,
         fix_hint: bool = False,
         on_hint_error: Callable[[int], None] = lambda status: None,
+        replacing: Mapping[str, str] | None = None,
     ) -> tuple[dict[str, str], bool]:
-        """Caller holds the group lock through its subsequent local link persistence."""
+        """Caller holds the group lock through its subsequent local link persistence.
+
+        With `replacing` (the group's current link, to a closed issue), that link does not count
+        as existing, and recovery only adopts another open issue: the closed one carries the same
+        marker and must never be re-adopted.
+        """
         existing = self.read_link(group)
-        if existing:
+        if existing and not same_issue(existing, replacing):
             self.assert_binding(group.project, existing, repo)
             return existing, False
         # Only an issue the token's own user opened can be a lost result of our create.
-        recovered = client.search_issues_by_marker(
-            data.dedup_id, author_id=client.current_user_id()
-        )
+        if replacing:
+            recovered = client.search_issues_by_marker(
+                data.dedup_id,
+                author_id=client.current_user_id(),
+                state="open",
+                exclude=[replacing["id"]],
+            )
+        else:
+            recovered = client.search_issues_by_marker(
+                data.dedup_id, author_id=client.current_user_id()
+            )
         if recovered:
             return self.remote_link(group.project, client, repo, recovered), False
         label_ids = client.resolve_label_ids(labels)

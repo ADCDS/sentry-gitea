@@ -20,6 +20,7 @@ from sentry_gitea.api.client import (
     GiteaClient,
     normalize_base_url,
     normalize_repo,
+    parse_gitea_time,
     url_origin,
 )
 from sentry_gitea.api.errors import GiteaApiError
@@ -827,3 +828,64 @@ def test_caller_may_hand_over_session_ownership():
     with GiteaClient(BASE, TOKEN, "owner/repo", session=session, owns_session=True):
         pass
     assert closed == [True]
+
+
+@responses.activate
+def test_marker_search_prefers_an_open_match_over_an_earlier_closed_one(client):
+    # A group re-filed after a close has two marked issues; recovery must find the open one.
+    dedup = "https://sentry.example/1/2"
+    responses.get(
+        API + "/repos/owner/repo/issues",
+        json=[
+            issue(number=7, body=marker_for(dedup), state="closed"),
+            issue(number=8, body=marker_for(dedup)),
+        ],
+        headers={"X-Total-Count": "2"},
+    )
+    assert client.search_issues_by_marker(dedup)["number"] == 8
+
+
+@responses.activate
+def test_marker_search_state_and_exclude_never_return_the_replaced_issue(client):
+    dedup = "https://sentry.example/1/2"
+    responses.get(
+        API + "/repos/owner/repo/issues",
+        json=[
+            # Gitea filters by state server-side; the client re-checks in case it does not.
+            issue(number=7, body=marker_for(dedup), state="closed"),
+            issue(number=9, body=marker_for(dedup)),
+        ],
+        headers={"X-Total-Count": "2"},
+    )
+    found = client.search_issues_by_marker(dedup, state="open", exclude=["9"])
+    assert found is None
+    query = parse_qs(urlsplit(responses.calls[0].request.url).query)
+    assert query["state"] == ["open"]
+    assert client.search_issues_by_marker(dedup, state="open", exclude=[7])["number"] == 9
+    assert client.search_issues_by_marker(dedup, state="closed")["number"] == 7
+
+
+def test_marker_search_rejects_unknown_states(client):
+    for state in ["", "OPEN", "merged", None]:
+        with pytest.raises(ValueError, match="state"):
+            client.search_issues_by_marker("x", state=state)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("2026-05-23T14:18:10Z", "2026-05-23T14:18:10+00:00"),
+        ("2026-05-23T14:18:10z", "2026-05-23T14:18:10+00:00"),
+        ("2026-10-31T12:20:07-03:00", "2026-10-31T12:20:07-03:00"),
+        ("2026-10-31T15:20:07.123456+00:00", "2026-10-31T15:20:07.123456+00:00"),
+    ],
+)
+def test_parse_gitea_time_returns_aware_datetimes(value, expected):
+    assert parse_gitea_time(value).isoformat() == expected
+
+
+@pytest.mark.parametrize(
+    "value", [None, "", "   ", "yesterday", "2026-05-23T14:18:10", "2026-05-23", 1700000000, {}]
+)
+def test_parse_gitea_time_rejects_naive_or_malformed_values(value):
+    assert parse_gitea_time(value) is None

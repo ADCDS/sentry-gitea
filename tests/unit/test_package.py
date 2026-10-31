@@ -22,7 +22,7 @@ def test_package_metadata_without_importing_sentry() -> None:
 
 
 def test_first_public_alpha_version_is_consistent() -> None:
-    assert __version__ == PROJECT["version"] == "0.1.0"
+    assert __version__ == PROJECT["version"] == "0.2.0"
 
 
 def test_meta_constants_match_pyproject_urls_and_author() -> None:
