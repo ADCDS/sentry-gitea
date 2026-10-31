@@ -338,3 +338,29 @@ def test_label_names_trim_and_deduplicate_without_case_folding():
 def test_label_input_limits(value):
     with pytest.raises(ValueError):
         parse_label_names(value)
+
+
+def test_recurrence_line_and_metadata_only_when_replacing_a_closed_issue(event):
+    assert "Recurrence of" not in render_body(event)
+    assert "recurrence_of" not in parse_metadata(render_body(event))
+    refiled = replace(event, recurrence_of="7", recurrence_closed="2026-05-23")
+    body = render_body(refiled)
+    assert "**Recurrence of:** #7 (closed 2026-05-23)" in body
+    # Right after the Sentry link, before the event details.
+    assert body.index("Recurrence of") < body.index("**Level:**")
+    assert parse_metadata(body)["recurrence_of"] == "7"
+    assert parse_metadata(body)["dedup_id"] == parse_metadata(render_body(event))["dedup_id"]
+
+
+@pytest.mark.parametrize("number", ["0", "07", "-7", "7a", "#7", "7 @admin", "1" * 20, ""])
+def test_recurrence_number_must_be_plain_digits(event, number):
+    body = render_body(replace(event, recurrence_of=number, recurrence_closed="2026-05-23"))
+    assert "Recurrence of" not in body
+    assert "recurrence_of" not in parse_metadata(body)
+
+
+@pytest.mark.parametrize("closed", ["", "2026-5-23", "yesterday", "2026-05-23 @admin"])
+def test_recurrence_close_date_is_omitted_unless_iso(event, closed):
+    body = render_body(replace(event, recurrence_of="7", recurrence_closed=closed))
+    assert "**Recurrence of:** #7\n" in body + "\n"
+    assert "closed" not in body.split("**Recurrence of:**")[1].split("\n")[0]

@@ -10,11 +10,11 @@ open issues. Both use the same project credentials and the same stored link.
 Build a wheel from this checkout with `uv build --wheel`. Copy the resulting wheel
 into the self-hosted checkout's `sentry/` directory. Add an installation command to
 that checkout's executable `sentry/enhance-image.sh`, preserving any existing image
-customizations. For version 0.1.0 the command is:
+customizations. For version 0.2.0 the command is:
 
 ```sh
 python -m pip install --no-deps --no-index --force-reinstall \
-    /usr/src/sentry/sentry_gitea-0.1.0-py3-none-any.whl
+    /usr/src/sentry/sentry_gitea-0.2.0-py3-none-any.whl
 ```
 
 Use the exact filename produced by the build when installing a different version.
@@ -141,6 +141,8 @@ disabling either plugin takes effect in running taskworkers without a restart.
 | Severity and class labels | On | Adds `severity:critical/high/medium/low` and `class:crash/other`. |
 | Comment on repeat events | On | Adds the firing event's details to a linked open issue. |
 | Advisory where-to-look hint | Off | Adds a bounded creation-time comparison when a commit-ish release and source location are available. |
+| New issue when a closed issue regresses (`refile_on_regression`) | On | When the linked Gitea issue is closed and Sentry recorded a regression for the group **after** that close, files a new issue that references the closed one and moves the link to it. |
+| New issue for any event an hour after closing (`refile_after_close`) | Off | Also files a new issue when the Sentry issue was never resolved: any alert more than an hour after the linked Gitea issue was closed. Use it when people close Gitea issues without resolving Sentry. |
 
 Create a Sentry **issue alert** for the desired error condition and project. Select
 the action for sending a notification through a specific legacy service and choose
@@ -162,8 +164,10 @@ other enabled legacy notification plugins. Choose one action path for this purpo
 adding both can deliver duplicate comments.
 
 The first firing event creates an issue and saves the same link the sidebar reads.
-Subsequent events fetch the linked issue: open issues receive comments when enabled,
-and closed issues are skipped without reopening. Comments include event ID, level,
+Subsequent events fetch the linked issue: open issues receive comments when enabled.
+A closed issue is never reopened or commented on. Instead, a **new** issue is filed
+when the problem has come back since the close (see "Closed issues" below); otherwise
+the event is skipped. Comments include event ID, level,
 environment, release, the Sentry event URL and a hidden event marker. Multiple rules
 may comment independently. Sentry's rule repeat interval and its inherited plugin
 limit of **10 notifications per project per 60 seconds** are separate controls.
@@ -232,7 +236,8 @@ that block when editing in Gitea. Edited Sentry form descriptions retain their p
 and receive the authoritative block.
 
 If remote creation succeeds but its response or local save fails, the next attempt
-searches open and closed issues for the exact metadata ID before creating again.
+searches open and closed issues for the exact metadata ID before creating again,
+preferring an open match (a re-filed group has several marked issues).
 Only issues **authored by the token's Gitea user** are accepted, so a marker copied
 into someone else's issue is ignored and a new issue is filed. A recovered issue is
 linked without an additional comment. This is recovery, not an exactly-once
@@ -261,13 +266,36 @@ for insufficient repository permissions, delivery reports an error. Recovery can
 that created issue, but does not repair its missing labels/assignees; correct permissions
 and adjust the remote issue manually.
 
+**Closed issues.** The plugins have no two-way status sync, so closing a Gitea issue does
+not resolve the Sentry issue, and before 0.2.0 a closed link silenced every later alert
+for that group. Now, when the linked issue is closed, the next alert files a new issue if:
+
+- `refile_on_regression` (default on): Sentry marked the group as regressed after the
+  Gitea issue's `closed_at`. That is the signal Sentry itself uses after a resolve,
+  including release- and commit-aware resolution, so a fix still waiting for its deploy
+  does not trigger it; or
+- `refile_after_close` (default off): the alert runs more than an hour after `closed_at`,
+  by Sentry's clock. This covers the common case of a Gitea issue closed while the Sentry
+  issue stays unresolved, which can never regress.
+
+The new issue has the same title and labels, a `**Recurrence of:** #N (closed YYYY-MM-DD)`
+line (Gitea shows it as a cross-reference on the old issue), and `recurrence_of` in its
+metadata block. The link moves to it, so later events comment there: at most one new
+issue per close. Nothing is filed when `closed_at` is missing, or when the organization
+**integration** links the same Gitea issue to the group, since its status sync owns that
+issue. Recovery after a lost link only adopts an **open** issue carrying the marker, never
+the closed one being replaced. To silence a group for good, archive it in Sentry.
+
 Diagnostics use `sentry_gitea.plugins.issue` and `sentry_gitea.plugins.alerts`. Failed
 alert calls log **ERROR** with `sentry-gitea: alert delivery failed` and `project_id`,
 `group_id`, `status`. A status of zero denotes a local/transport/budget failure.
 Successful delivery logs **INFO** with `sentry-gitea: filed issue` or
-`sentry-gitea: commented on issue`. A repeat event that is not commented on (closed
-issue, or repeat comments turned off) logs `sentry-gitea: skipped repeat event` with a
-`reason`. An optional hint failure can log an error
+`sentry-gitea: commented on issue`; a re-filed issue's `filed issue` line also carries
+`recurrence_of` and `refile_reason` (`regressed` or `after_close`). A repeat event that is
+not commented on (closed issue, or repeat comments turned off) logs
+`sentry-gitea: skipped repeat event` with a `reason`; for a closed issue,
+`refile_skipped` says why no new issue was filed (`disabled`, `no closed_at`,
+`integration linked` or `no recurrence signal`). An optional hint failure can log an error
 followed by successful filing. No token, headers, raw request exception or
 credential-bearing URL is logged. Sentry's legacy callback swallows exceptions, so
 consult these logs; the framework does not promise a retry. Event markers support

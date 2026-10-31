@@ -3,20 +3,26 @@
 import json
 import time
 from contextlib import contextmanager
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 import responses
 from django.test import override_settings
+from django.utils import timezone
 from sentry import eventstore
 from sentry.exceptions import PluginError
+from sentry.integrations.models.external_issue import ExternalIssue
 from sentry.locks import locks
+from sentry.models.activity import Activity
+from sentry.models.grouplink import GroupLink
 from sentry.models.groupmeta import GroupMeta
 from sentry.plugins.base import plugins
 from sentry.rules.actions.notify_event import NotifyEventAction
 from sentry.rules.actions.notify_event_service import NotifyEventServiceAction
 from sentry.testutils.cases import TestCase
+from sentry.types.activity import ActivityType
 from sentry.types.rules import RuleFuture
 from sentry.utils.locking import UnableToAcquireLock
 
@@ -147,11 +153,23 @@ class TestGiteaAlertsPlugin(TestCase):
         assert (self.plugin.author, self.plugin.author_url) == (AUTHOR, PROJECT_URL)
         assert ("Bug Tracker", ISSUES_URL) in self.plugin.resource_links
         fields = {f["name"]: f for f in self.plugin.get_config(self.project)}
-        assert set(fields) == {"labels", "severity_labels", "comment_on_repeat", "fix_hint"}
+        assert set(fields) == {
+            "labels",
+            "severity_labels",
+            "comment_on_repeat",
+            "fix_hint",
+            "refile_on_regression",
+            "refile_after_close",
+        }
         assert fields["labels"]["default"] == "source:sentry"
         assert fields["severity_labels"]["default"] is True
         assert fields["comment_on_repeat"]["default"] is True
         assert fields["fix_hint"]["default"] is False
+        assert fields["refile_on_regression"]["default"] is True
+        assert fields["refile_after_close"]["default"] is False
+        for key in ["refile_on_regression", "refile_after_close"]:
+            with self.assertRaises(PluginError):
+                self.plugin.validate_config(self.project, {key: "yes"})
         assert self.plugin.is_configured(self.project)
         self.issue_plugin.disable(self.project)
         assert self.plugin.is_configured(self.project) is False
@@ -511,6 +529,188 @@ class TestGiteaAlertsPlugin(TestCase):
         ) as limit:
             assert self.plugin.should_notify(self.group, self.event) is False
         limit.assert_called_once_with(project=self.project, key="gitea_alerts", limit=10)
+
+    # Re-filing after the linked issue was closed (0.2.0).
+
+    def issue_creates(self):
+        return [
+            json.loads(c.request.body)
+            for c in responses.calls
+            if c.request.method == "POST" and c.request.url == API + "/issues"
+        ]
+
+    def file_then_close(self, *, closed_ago, closed_at=True):
+        """File #7, then make Gitea report it closed `closed_ago` ago; the next create is #8."""
+        self.mock_create()
+        self.notify()
+        assert self.issue_plugin.read_link(self.group)["id"] == "7"
+        extra = {}
+        if closed_at:
+            extra["closed_at"] = (timezone.now() - closed_ago).strftime("%Y-%m-%dT%H:%M:%SZ")
+        responses.get(API + "/issues/7", json=self.remote_issue(state="closed", **extra))
+        responses.replace(
+            responses.POST,
+            API + "/issues",
+            json=self.remote_issue(number=8, html_url="http://gitea:3000/owner/repo/issues/8"),
+            status=201,
+        )
+
+    def regress(self, ago):
+        Activity.objects.create(
+            project=self.project,
+            group=self.group,
+            type=ActivityType.SET_REGRESSION.value,
+            datetime=timezone.now() - ago,
+            data={},
+        )
+
+    def assert_skipped(self, refile_skipped):
+        before = len(responses.calls)
+        with self.assertLogs("sentry_gitea.plugins.alerts", level="INFO") as logs:
+            self.notify()
+        record = next(r for r in logs.records if r.message.startswith("sentry-gitea: skipped"))
+        assert (record.reason, record.refile_skipped) == ("closed", refile_skipped)
+        assert all(c.request.method == "GET" for c in responses.calls[before:])
+        assert self.issue_plugin.read_link(self.group)["id"] == "7"
+
+    @responses.activate
+    def test_regression_after_close_files_a_new_issue_referencing_the_old_one(self):
+        self.file_then_close(closed_ago=timedelta(days=2))
+        self.regress(timedelta(hours=1))
+        with self.assertLogs("sentry_gitea.plugins.alerts", level="INFO") as logs:
+            self.notify()
+        record = next(r for r in logs.records if r.message.startswith("sentry-gitea: filed"))
+        assert (record.issue_id, record.recurrence_of, record.refile_reason) == (
+            "8",
+            "7",
+            "regressed",
+        )
+        link = self.issue_plugin.read_link(self.group)
+        assert (link["id"], link["url"]) == ("8", BASE + "/owner/repo/issues/8")
+        first, second = self.issue_creates()
+        assert first["title"] == second["title"]
+        assert first["labels"] == second["labels"]
+        expected_date = (timezone.now() - timedelta(days=2)).date().isoformat()
+        assert f"**Recurrence of:** #7 (closed {expected_date})" in second["body"]
+        assert "Recurrence of" not in first["body"]
+        assert parse_metadata(second["body"])["recurrence_of"] == "7"
+        assert (
+            parse_metadata(second["body"])["dedup_id"] == parse_metadata(first["body"])["dedup_id"]
+        )
+        # Recovery during the re-file only looks at open issues.
+        searches = [
+            c.request.url
+            for c in responses.calls
+            if c.request.method == "GET" and c.request.url.startswith(API + "/issues?")
+        ]
+        assert "state=open" in searches[-1]
+        # The new link is open: the next alert comments on #8 and files nothing.
+        responses.get(API + "/issues/8", json=self.remote_issue(number=8))
+        responses.post(API + "/issues/8/comments", json={"id": 89}, status=201)
+        self.notify()
+        assert responses.calls[-1].request.url == API + "/issues/8/comments"
+        assert len(self.issue_creates()) == 2
+
+    @responses.activate
+    def test_regression_before_the_close_does_not_refile(self):
+        self.file_then_close(closed_ago=timedelta(days=1))
+        self.regress(timedelta(days=2))
+        self.assert_skipped("no recurrence signal")
+
+    @responses.activate
+    def test_missing_closed_at_never_refiles(self):
+        self.plugin.set_option("refile_after_close", True, self.project)
+        self.file_then_close(closed_ago=timedelta(days=2), closed_at=False)
+        self.regress(timedelta(hours=1))
+        self.assert_skipped("no closed_at")
+
+    @responses.activate
+    def test_both_refile_options_off_keep_closed_issues_silent(self):
+        self.plugin.set_option("refile_on_regression", False, self.project)
+        self.file_then_close(closed_ago=timedelta(days=2))
+        self.regress(timedelta(hours=1))
+        self.assert_skipped("disabled")
+
+    @responses.activate
+    def test_refile_after_close_waits_out_the_grace_period(self):
+        self.plugin.set_option("refile_after_close", True, self.project)
+        self.file_then_close(closed_ago=timedelta(minutes=13))
+        self.assert_skipped("no recurrence signal")
+        responses.replace(
+            responses.GET,
+            API + "/issues/7",
+            json=self.remote_issue(
+                state="closed",
+                closed_at=(timezone.now() - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            ),
+        )
+        with self.assertLogs("sentry_gitea.plugins.alerts", level="INFO") as logs:
+            self.notify()
+        record = next(r for r in logs.records if r.message.startswith("sentry-gitea: filed"))
+        assert record.refile_reason == "after_close"
+        assert self.issue_plugin.read_link(self.group)["id"] == "8"
+
+    @responses.activate
+    def test_refile_after_close_is_off_by_default(self):
+        self.file_then_close(closed_ago=timedelta(days=3))
+        self.assert_skipped("no recurrence signal")
+
+    @responses.activate
+    def test_comment_on_repeat_off_does_not_block_a_refile(self):
+        self.plugin.set_option("comment_on_repeat", False, self.project)
+        self.file_then_close(closed_ago=timedelta(days=2))
+        self.regress(timedelta(hours=1))
+        self.notify()
+        assert self.issue_plugin.read_link(self.group)["id"] == "8"
+
+    @responses.activate
+    def test_lost_refile_link_recovers_the_new_open_issue_never_the_closed_one(self):
+        self.file_then_close(closed_ago=timedelta(days=2))
+        self.regress(timedelta(hours=1))
+        with patch.object(
+            GiteaIssuePlugin, "write_link", side_effect=RuntimeError("DB unavailable")
+        ):
+            with self.assertLogs("sentry_gitea.plugins.alerts", level="ERROR"):
+                with self.assertRaises(PluginError):
+                    self.notify()
+        assert self.issue_plugin.read_link(self.group)["id"] == "7"
+        _, refiled = self.issue_creates()
+        old_body = self.issue_creates()[0]["body"]
+        # Both carry the group's marker; the server-side state filter is not trusted alone.
+        responses.replace(
+            responses.GET,
+            API + "/issues",
+            json=[
+                self.remote_issue(number=7, state="closed", body=old_body),
+                self.remote_issue(number=8, body=refiled["body"]),
+            ],
+            headers={"X-Total-Count": "2"},
+        )
+        self.notify()
+        assert self.issue_plugin.read_link(self.group)["id"] == "8"
+        assert len(self.issue_creates()) == 2
+
+    @responses.activate
+    def test_integration_linked_issue_is_left_to_the_integrations_status_sync(self):
+        self.file_then_close(closed_ago=timedelta(days=2))
+        self.regress(timedelta(hours=1))
+        integration = self.create_integration(
+            organization=self.organization, provider="gitea", external_id="gitea-test"
+        )
+        external = ExternalIssue.objects.create(
+            organization_id=self.organization.id,
+            integration_id=integration.id,
+            key="41#7",
+            title="Remote issue",
+        )
+        GroupLink.objects.create(
+            group=self.group,
+            project_id=self.project.id,
+            linked_id=external.id,
+            linked_type=GroupLink.LinkedType.issue,
+            relationship=GroupLink.Relationship.references,
+        )
+        self.assert_skipped("integration linked")
 
 
 class TestAlertsReadFreshOptions(TestCase):

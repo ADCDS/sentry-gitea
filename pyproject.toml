@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sentry-gitea"
-version = "0.1.0"
+version = "0.2.0"
 description = "Gitea integration for self-hosted Sentry: issue plugins and an OAuth organization integration."
 readme = "README.md"
 license = "Apache-2.0"

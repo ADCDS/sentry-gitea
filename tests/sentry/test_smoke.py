@@ -22,7 +22,7 @@ from sentry_gitea.plugins.issue import GiteaIssuePlugin
 def test_plugins_discovered_from_installed_entry_points(slug, plugin_class) -> None:
     plugin = plugins.get(slug)
     assert isinstance(plugin, plugin_class)
-    assert plugin.version == __version__ == "0.1.0"
+    assert plugin.version == __version__ == "0.2.0"
     assert (plugin.author, plugin.author_url) == (AUTHOR, PROJECT_URL)
     assert ("Source", PROJECT_URL) in plugin.resource_links
     assert ("Bug Tracker", ISSUES_URL) in plugin.resource_links

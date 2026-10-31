@@ -287,6 +287,43 @@ def test_closed_issue_skips_repeat(plugin_flow: PluginFlow) -> None:
     flow.observe_issue(group, issue, before, seconds=15, state="closed")
 
 
+def test_regression_after_close_files_a_new_issue(plugin_flow: PluginFlow) -> None:
+    flow = plugin_flow
+    group, issue = flow.file_alert("specific")
+    flow.gitea.request(
+        "PATCH", f"{flow.issues_path}/{issue['number']}", expected=(201,), json={"state": "closed"}
+    )
+    # Resolving in Sentry makes the next event with the same fingerprint a regression,
+    # recorded after the Gitea close.
+    flow.sentry.request("PUT", flow.group_path(group), json={"status": "resolved"})
+    flow.replace_rule("specific")
+    repeated = flow.send_and_wait()
+    assert repeated["id"] == group["id"]
+    flow.wait_for_plugin_log(
+        repeated,
+        "filed issue",
+        recurrence_of=str(issue["number"]),
+        refile_reason="regressed",
+    )
+    refiled = flow.poll_alert(
+        "re-filed Gitea issue",
+        group,
+        lambda: [i for i in flow.matching_issues(group) if i["number"] != issue["number"]],
+    )
+    check(len(refiled) == 1, "Re-filing created duplicate issues")
+    new = refiled[0]
+    assert new["state"] == "open"
+    assert f"**Recurrence of:** #{issue['number']}" in new["body"]
+    assert flow.issue(issue["number"])["state"] == "closed", "The closed issue was reopened"
+
+    def moved() -> bool:
+        link = flow.plugin_issue(group).get("issue")
+        return bool(link and str(link["issue_id"]) == str(new["number"]))
+
+    flow.poll_alert("Sentry link moved to the re-filed issue", group, moved)
+    flow.assert_link(group, new["number"])
+
+
 def test_alert_failure_is_visible_and_redacted(plugin_flow: PluginFlow) -> None:
     flow = plugin_flow
     flow.replace_rule("specific")

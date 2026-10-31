@@ -8,7 +8,7 @@ installed into the Sentry image with pip. You can create and link Gitea issues f
 open them automatically when alert rules fire. An organization integration based on OAuth adds
 owner-scoped install and search, issue sync, commit tracking, stack-trace links and CODEOWNERS.
 
-> **Status: alpha** (version `0.1.0`). Tested only with **self-hosted Sentry 26.3.1** (errors-only
+> **Status: alpha** (version `0.2.0`). Tested only with **self-hosted Sentry 26.3.1** (errors-only
 > profile) and **Gitea 28.1.0**. Other versions, and Gitea forks such as Forgejo, are untested. Expect
 > breaking changes before 1.0. It is not on PyPI yet.
 
@@ -40,8 +40,9 @@ or both together. Their issue links are stored separately and are not migrated b
   default labels. Missing labels are created on first use.
 - **Gitea Alerts** (`gitea_alerts`) is an issue-alert action. On the first event it files a Gitea issue,
   labelled by default with `source:sentry`, `severity:<critical|high|medium|low>` and
-  `class:<crash|other>`. Later events add a comment while the linked issue is open, and closed issues
-  are left alone. An optional advisory "where to look" hint is available.
+  `class:<crash|other>`. Later events add a comment while the linked issue is open. When the linked issue is closed and
+  the problem comes back (a Sentry regression after the close, or optionally any event an hour after
+  it), a new issue that references the closed one is filed and linked. An optional advisory "where to look" hint is available.
 
 **Organization integration.** A Gitea provider for Sentry's integrations directory:
 
@@ -116,7 +117,7 @@ from source with [uv](https://docs.astral.sh/uv/):
 ```sh
 git clone https://github.com/ADCDS/sentry-gitea.git
 cd sentry-gitea
-uv build --wheel          # writes dist/sentry_gitea-0.1.0-py3-none-any.whl
+uv build --wheel          # writes dist/sentry_gitea-0.2.0-py3-none-any.whl
 ```
 
 Copy the wheel into the self-hosted checkout's `sentry/` directory. That directory is the image build
@@ -129,7 +130,7 @@ customizations, make it executable, and add:
 
 ```sh
 python -m pip install --no-deps --no-index --force-reinstall \
-    /usr/src/sentry/sentry_gitea-0.1.0-py3-none-any.whl
+    /usr/src/sentry/sentry_gitea-0.2.0-py3-none-any.whl
 ```
 
 The `--no-deps` flag is deliberate: the Sentry image already provides `requests` and `urllib3`, and

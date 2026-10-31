@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
+from datetime import datetime
 from typing import Any, Self
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
@@ -121,6 +122,23 @@ def normalize_repo(value: str) -> str:
     if len(parts) != 2 or any(p in {".", ".."} or not re.fullmatch(r"[\w.-]+", p) for p in parts):
         raise ValueError("Repository must be owner/name.")
     return value
+
+
+ISSUE_STATES = frozenset({"all", "open", "closed"})
+
+
+def parse_gitea_time(value: Any) -> datetime | None:
+    """A timezone-aware datetime from a Gitea RFC 3339 timestamp; anything else is None."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text[-1:] in {"Z", "z"}:
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.utcoffset() is not None else None
 
 
 def issue_number(value: str | int) -> str:
@@ -627,19 +645,34 @@ class GiteaClient(_Transport):
         ]
 
     def search_issues_by_marker(
-        self, dedup_id: str, *, author_id: int | None = None, repo: str | None = None
+        self,
+        dedup_id: str,
+        *,
+        author_id: int | None = None,
+        repo: str | None = None,
+        state: str = "all",
+        exclude: Collection[str | int] = (),
     ) -> dict[str, Any] | None:
-        """The first issue (open or closed) whose metadata marker names `dedup_id`.
+        """The issue whose metadata marker names `dedup_id`: the first open match, else the
+        first closed one.
 
         Anyone who can open an issue can paste a marker. With `author_id`, only issues opened by
-        that Gitea user count, so a planted marker cannot capture a Sentry group's link.
+        that Gitea user count, so a planted marker cannot capture a Sentry group's link. A group
+        that was re-filed after a close has several marked issues; `state` limits the search and
+        numbers in `exclude` never match.
         """
         if author_id is not None and (type(author_id) is not int or author_id <= 0):
             raise ValueError("The marker author must be a positive Gitea user ID.")
+        if state not in ISSUE_STATES:
+            raise ValueError("Issue state must be all, open or closed.")
+        excluded = {str(number) for number in exclude}
         path = self._repo_path(repo) + "/issues"
-        for page in self._pages(path, state="all", type="issues", q=dedup_id):
+        closed_match = None
+        for page in self._pages(path, state=state, type="issues", q=dedup_id):
             for issue in page:
-                if is_pull_request(issue):
+                if is_pull_request(issue) or str(issue.get("number")) in excluded:
+                    continue
+                if state != "all" and issue.get("state") != state:
                     continue
                 if author_id is not None:
                     user = issue.get("user")
@@ -648,8 +681,10 @@ class GiteaClient(_Transport):
                         continue
                 metadata = parse_metadata(issue.get("body") or "", dedup_id=dedup_id)
                 if metadata and metadata.get("dedup_id") == dedup_id:
-                    return issue
-        return None
+                    if issue.get("state") != "closed":
+                        return issue
+                    closed_match = closed_match or issue
+        return closed_match
 
     def compare_commits(
         self, base: str, head: str, *, read_deadline: float | None = None
