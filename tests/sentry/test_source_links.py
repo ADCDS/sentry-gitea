@@ -222,7 +222,25 @@ class TestSourceLinks(SyncFixture):
         )
         rows = self.installation.get_repositories("team")
         assert [r["identifier"] for r in rows] == ["team/repo", "team/b"]
-        assert rows[0] == {"identifier": "team/repo", "name": "team/repo", "default_branch": "main"}
+        assert rows[0] == {
+            "identifier": "team/repo",
+            "name": "team/repo",
+            "external_id": str(REPO["id"]),
+            "default_branch": "main",
+        }
+        # Sentry 26.5+ calls the picker with these keywords (26.7 added `parallel`); a keyword
+        # this version does not know must not fail either.
+        assert (
+            self.installation.get_repositories(
+                "team",
+                accessible_only=True,
+                use_cache=True,
+                raise_on_page_limit=True,
+                parallel=True,
+                added_by_a_later_sentry=True,
+            )
+            == rows
+        )
         assert self.installation.get_repository_choices(None, {}) == (
             "team/b",
             [("team/b", "team/b")],

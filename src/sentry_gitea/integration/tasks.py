@@ -27,6 +27,8 @@ from sentry.silo.base import SiloMode
 from sentry.tasks.base import instrumented_task
 from sentry.taskworker.namespaces import integrations_tasks
 
+# Registers `deliver_alert` wherever this module is: TASKWORKER_IMPORTS already lists it.
+from sentry_gitea.alerts import tasks as alert_tasks  # noqa: F401
 from sentry_gitea.api.client import is_sha
 from sentry_gitea.api.webhooks import PayloadError, is_zero_sha, normalize_api_commit
 

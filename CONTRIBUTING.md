@@ -12,7 +12,8 @@ also need Docker with Compose ≥ 2.32.2.
 uv sync
 make unit lint                        # fast host checks; run before every push
 uv run pytest tests/e2e -m "not e2e"  # host-only tests of the E2E harness
-make sentry-tests                     # tests/sentry in the pinned ghcr.io/getsentry/sentry:26.3.1 image
+make sentry-tests                     # tests/sentry in ghcr.io/getsentry/sentry:26.3.1
+SENTRY_IMAGE=ghcr.io/getsentry/sentry:26.11.0 make sentry-tests   # and in the newest supported Sentry
 ```
 
 CI runs lint, unit, harness and Sentry-level tests on every pull request. The end-to-end suite needs

@@ -7,8 +7,10 @@ test tree, not in the image, but its test case classes depend on them: without
 test transaction guard rejects.
 """
 
+import importlib.util
 import os
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 import responses
@@ -84,3 +86,24 @@ def check_leaked_responses_mocks() -> Iterator[None]:
         responses.reset()
         listing = "".join(f"- {item}\n" for item in leaked)
         raise AssertionError(f"`responses` mocks leaked outside their test:\n{listing}")
+
+
+def _legacy_plugins() -> bool:
+    """Whether this Sentry still has the legacy plugin base classes (removed in 26.7)."""
+    # By path: importing the package here would load Django-dependent modules before the
+    # Sentry pytest plugin has configured settings.
+    spec = importlib.util.find_spec("sentry")
+    root = Path(spec.origin).parent if spec and spec.origin else None
+    return bool(root and (root / "plugins" / "bases" / "issue2.py").is_file())
+
+
+LEGACY_PLUGINS = _legacy_plugins()
+# The legacy issue plugin (settings form and manual create/link views) cannot be imported
+# without those classes. test_alerts_plugin.py runs everywhere: without plugins it drives the
+# shared delivery directly.
+collect_ignore = [] if LEGACY_PLUGINS else ["test_issue_plugin.py"]
+
+
+def pytest_report_header(config):
+    state = "present" if LEGACY_PLUGINS else "absent: test_issue_plugin.py not collected"
+    return f"sentry-gitea: legacy plugin classes {state}"

@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Sentry 26.3.1's image runs Python 3.13; uv downloads it if the runner lacks it.
+  # Sentry's images (26.3.1 to 26.11.0) run Python 3.13; uv downloads it if the runner lacks it.
   UV_PYTHON: "3.13"
 
 jobs:
@@ -46,9 +46,18 @@ jobs:
         run: uv run pytest tests/e2e -m "not e2e" -q
 
   sentry-level:
-    name: Sentry-level tests (sentry 26.3.1 image)
+    name: Sentry-level tests (sentry ${{ matrix.sentry }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # The self-hosted hard stops on the way from 26.3.1 to 26.11.0. Legacy plugins exist
+        # up to 26.6; from 26.7 the legacy issue plugin's test module is not collected and
+        # the alert behaviour suite drives the shared delivery code directly.
+        sentry: ["26.3.1", "26.5.0", "26.7.0", "26.11.0"]
+    env:
+      SENTRY_IMAGE: ghcr.io/getsentry/sentry:${{ matrix.sentry }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -69,8 +78,8 @@ jobs:
         run: docker compose -p sentry-gitea-tests -f docker/test-sentry.compose.yml pull --quiet
 
       # Same entry point as local development: builds the wheel, starts disposable
-      # Postgres + Redis, installs the wheel into ghcr.io/getsentry/sentry:26.3.1 and
-      # runs tests/sentry. .e2e/local.env is optional and absent here.
+      # Postgres + Redis, installs the wheel into the matrix's Sentry image (SENTRY_IMAGE)
+      # and runs tests/sentry. .e2e/local.env is optional and absent here.
       - name: Sentry-level tests
         run: make sentry-tests SENTRY_TEST_WORKERS=2
 

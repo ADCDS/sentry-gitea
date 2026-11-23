@@ -10,12 +10,16 @@ from urllib.parse import parse_qs
 import responses
 from sentry.constants import ObjectStatus
 from sentry.taskworker.runtime import app
-from sentry.taskworker.scheduler.runner import ScheduleRunner
 from sentry.testutils.silo import no_silo_test
 from sentry.users.models.identity import Identity
 from test_integration_provider import BASE, METADATA, TOKENS, IntegrationFixture
 
 from sentry_gitea.integration.tasks import KEEPALIVE_AGE, refresh_identities
+
+try:  # Sentry 26.3 and 26.4 ship the schedule runner themselves.
+    from sentry.taskworker.scheduler.runner import ScheduleRunner
+except ImportError:  # 26.5 moved it into the taskbroker-client package.
+    from taskbroker_client.scheduler import ScheduleRunner
 
 LOGGER = "sentry_gitea.integration"
 TOKEN_URL = BASE + "/login/oauth/access_token"

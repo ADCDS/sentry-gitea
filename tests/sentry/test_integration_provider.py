@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 import responses
 from django.http import HttpResponse
 from django.test import RequestFactory, override_settings
+from django.urls import reverse
 from sentry import identity
 from sentry.api.serializers import serialize
 from sentry.integrations.api.serializers.models.integration import IntegrationProviderSerializer
@@ -275,6 +276,24 @@ class TestGiteaInstallPipeline(IntegrationTestCase):
     def provider(self):
         return default_manager.get("gitea")
 
+    def install_path(self):
+        return reverse("sentry-gitea-install", kwargs={"organization_slug": self.organization.slug})
+
+    def test_install_page_needs_a_login_and_the_integrations_scope(self):
+        outsider = self.create_user()
+        member = self.create_user()
+        self.create_member(user=member, organization=self.organization, role="member")
+        for user in (outsider, member):
+            self.login_as(user)
+            denied = self.client.get(self.install_path())
+            assert BASE not in denied.get("Location", ""), "no OAuth redirect without the scope"
+            assert denied.status_code in (302, 401, 403, 404)
+        self.client.logout()
+        anonymous = self.client.get(self.install_path())
+        assert anonymous.status_code == 302 and "/auth/login/" in anonymous["Location"]
+        self.login_as(self.user)
+        assert self.client.post(self.install_path()).status_code in (403, 405)
+
     @responses.activate
     def test_generic_setup_callback_owner_submit_and_identity_persistence(self):
         responses.post(
@@ -283,7 +302,8 @@ class TestGiteaInstallPipeline(IntegrationTestCase):
         )
         responses.get(API + "/user", json=USER)
         responses.get(API + "/user/orgs", json=[])
-        start = self.client.get(self.init_path)
+        # Our own start page: the only one on Sentry 26.7+, and equivalent to Sentry's before.
+        start = self.client.get(self.install_path())
         assert start.status_code == 302
         query = parse_qs(urlsplit(start["Location"]).query)
         assert query["state"] and query["code_challenge_method"] == ["S256"]
