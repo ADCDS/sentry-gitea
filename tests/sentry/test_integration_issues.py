@@ -110,8 +110,11 @@ class TestIntegrationIssues(IntegrationFixture):
             headers={"X-Total-Count": "1"},
         )
         retry = self.client.put(self.issue_endpoint(), data)
-        assert retry.status_code == 400
+        # Sentry answered "already linked" with 400 until 26.10 and treats the repeat as a
+        # success since. Either way the backlink comment must not be posted a second time.
+        assert retry.status_code in (200, 400)
         assert len([c for c in responses.calls if c.request.method == "POST"]) == 1
+        assert ExternalIssue.objects.filter(integration_id=self.integration.id).count() == 1
 
     @responses.activate
     def test_create_and_link_default_to_base_url_when_public_url_is_unset(self):

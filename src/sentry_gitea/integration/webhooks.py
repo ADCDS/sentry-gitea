@@ -53,6 +53,14 @@ from .tasks import backfill_push
 from .utils import issue_key, repo_webhook_secret
 
 logger = logging.getLogger(__name__)
+# Sentry renames the members of this enum between releases: INTEGRATIONS exists up to 26.4,
+# and from 26.5 its own SCM webhooks use CODING_WORKFLOWS. The value only labels the endpoint
+# in Sentry's metrics, so take the first name this Sentry knows.
+API_OWNER = next(
+    getattr(ApiOwner, name)
+    for name in ("INTEGRATIONS", "CODING_WORKFLOWS", "UNOWNED")
+    if hasattr(ApiOwner, name)
+)
 
 
 class GiteaWebhook(SCMWebhook):
@@ -121,7 +129,7 @@ HANDLERS: dict[str, type[GiteaWebhook]] = {
 
 @cell_silo_endpoint
 class GiteaWebhookEndpoint(Endpoint):
-    owner = ApiOwner.INTEGRATIONS
+    owner = API_OWNER
     publish_status = {"POST": ApiPublishStatus.PRIVATE}
     authentication_classes = ()
     permission_classes = ()

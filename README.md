@@ -8,9 +8,14 @@ installed into the Sentry image with pip. You can create and link Gitea issues f
 open them automatically when alert rules fire. An organization integration based on OAuth adds
 owner-scoped install and search, issue sync, commit tracking, stack-trace links and CODEOWNERS.
 
-> **Status: alpha** (version `0.2.0`). Tested only with **self-hosted Sentry 26.3.1** (errors-only
-> profile) and **Gitea 28.1.0**. Other versions, and Gitea forks such as Forgejo, are untested. Expect
+> **Status: alpha** (version `0.3.0`). The Sentry-level tests run against **self-hosted Sentry 26.3.1,
+> 26.5.0, 26.7.0 and 26.11.0**; the end-to-end suite has only been run against 26.3.1 (errors-only
+> profile). Gitea is **28.1.0**. Other versions, and Gitea forks such as Forgejo, are untested. Expect
 > breaking changes before 1.0. It is not on PyPI yet.
+>
+> **Upgrading Sentry past 26.3?** Install sentry-gitea 0.3.0 first. Version 0.2.0 stops Sentry's web
+> process from starting on 26.5.0, and from 26.7.0 its alert rules fire without doing anything. See
+> [Sentry versions](#sentry-versions) and [Upgrade](#upgrade).
 
 ## Why
 
@@ -18,7 +23,10 @@ Sentry's built-in source-code and issue-tracking integrations cover GitHub, GitL
 DevOps and Perforce, but not Gitea. We found no maintained Sentry↔Gitea integration for current Sentry
 releases. This package fills that gap for self-hosted installs. It uses Sentry's existing extension
 points (legacy plugin entry points, `SENTRY_DEFAULT_INTEGRATIONS`, URL configuration and taskworker
-imports) and does not patch Sentry.
+imports) and changes none of Sentry's files. One thing it does replace at run time: the handlers of two
+alert-action types in Sentry's workflow engine are wrapped so that alerts keep reaching Gitea on a
+Sentry without legacy plugins (the [alert bridge](docs/PLUGINS.md#how-alerts-reach-gitea), which
+`GITEA_ALERTS_BRIDGE = False` turns off).
 
 ## Two ways to use it
 
@@ -29,8 +37,8 @@ or both together. Their issue links are stored separately and are not migrated b
 |---|---|---|
 | Scope | One Sentry project → one Gitea repository | One Sentry organization → one Gitea owner (user or org) per install, multiple installs allowed |
 | Gitea credentials | Personal access token, per project | OAuth2 app (confidential client, S256 PKCE), one per Sentry deployment |
-| Where to configure | Project Settings → Legacy Integrations | Organization Settings → Integrations |
-| `sentry.conf.py` changes | Only for Gitea on a private address (`GITEA_PLUGIN_ALLOWED_BASE_URLS`) | Required |
+| Where to configure | `<sentry>/extensions/gitea/settings/<org>/`; on Sentry 26.6 and older also Project Settings → Legacy Integrations | Organization Settings → Integrations |
+| `sentry.conf.py` changes | Sentry 26.6 and older: only for Gitea on a private address. Sentry 26.7 and newer: three lines, see [Sentry versions](#sentry-versions) | Required |
 | Docs | [docs/PLUGINS.md](docs/PLUGINS.md) | [docs/INTEGRATION.md](docs/INTEGRATION.md) |
 
 **Project plugins.** Two legacy plugins are registered through Python entry points:
@@ -44,6 +52,10 @@ or both together. Their issue links are stored separately and are not migrated b
   the problem comes back (a Sentry regression after the close, or optionally any event an hour after
   it), a new issue that references the closed one is filed and linked. An optional advisory "where to look" hint is available.
 
+Sentry 26.7 removed legacy plugins. The mode keeps its name, settings and issue links there: alerts
+are delivered by the package's own code and the settings move to the package's pages. Only the sidebar
+actions are gone, because Sentry no longer shows them.
+
 **Organization integration.** A Gitea provider for Sentry's integrations directory:
 
 - OAuth install and choice of owner (your namespace or an org you own). Create issues with a
@@ -53,13 +65,29 @@ or both together. Their issue links are stored separately and are not migrated b
   repository, commit and pull-request import with bounded backfill, release commit ranges, stack-trace
   source links through code mappings, and CODEOWNERS import (email owners only).
 
+## Sentry versions
+
+| | Sentry 26.3.1, 26.5.0 | Sentry 26.7.0, 26.11.0 |
+|---|---|---|
+| Legacy plugins exist in Sentry | Yes | No (removed in 26.7) |
+| Project settings | Legacy Integrations pages, or `/extensions/gitea/settings/<org>/` | `/extensions/gitea/settings/<org>/` |
+| Alerts from rules that name Gitea Alerts | Delivered | Delivered, by the alert bridge |
+| Choosing Gitea in the alert-rule editor | "Gitea Alerts" legacy service | An internal Sentry App ([how](docs/PLUGINS.md#rules-on-sentry-267-and-newer)) |
+| Sidebar Create / Link / Unlink with the project token | Yes | No; use the integration |
+| Installing the integration | `/extensions/gitea/install/<org>/` (on 26.3.1 the Integrations directory's button also works) | `/extensions/gitea/install/<org>/` |
+| `sentry.conf.py` lines needed for the plugins mode | None | `SENTRY_DEFAULT_INTEGRATIONS`, `ROOT_URLCONF` and `TASKWORKER_IMPORTS` |
+
+Stored settings and issue links are the same on every version, so a Sentry upgrade migrates nothing.
+Versions between the tested ones are expected to behave like the nearest older tested one, but have
+not been run.
+
 ## Feature matrix
 
 | Feature | Plugins | Integration |
 |---|---|---|
-| Create a Gitea issue from a Sentry issue | Yes | Yes |
-| Link an existing issue (optional backlink comment) | Yes, by number | Yes, search by number or title |
-| Unlink (the Gitea issue is left untouched) | Yes | Yes |
+| Create a Gitea issue from a Sentry issue | Sentry 26.6 and older | Yes |
+| Link an existing issue (optional backlink comment) | Sentry 26.6 and older, by number | Yes, search by number or title |
+| Unlink (the Gitea issue is left untouched) | Sentry 26.6 and older | Yes |
 | Repository / issue search | No (one fixed repository) | Yes, scoped to the installed owner |
 | Auto-file issues from alert rules | Yes | No (use the plugin) |
 | Comment on repeat events | Yes (open issues only) | No |
@@ -101,7 +129,8 @@ or both together. Their issue links are stored separately and are not migrated b
 
 ## Requirements
 
-- A [self-hosted Sentry](https://develop.sentry.dev/self-hosted/) **26.3.1** installation (Docker Compose).
+- A [self-hosted Sentry](https://develop.sentry.dev/self-hosted/) installation (Docker Compose) at one
+  of the tested versions: **26.3.1, 26.5.0, 26.7.0 or 26.11.0**.
 - **Gitea 28.1.0** with its built-in issue tracker enabled on the repositories you use.
 - Network paths: Sentry web **and** worker containers → Gitea API. For the integration, users' browsers
   → Gitea (OAuth), and Gitea → Sentry for repository webhooks.
@@ -111,13 +140,13 @@ or both together. Their issue links are stored separately and are not migrated b
 ### 1. Get a wheel
 
 PyPI publication is planned but has not happened yet. Download the wheel attached to a
-[GitHub release](https://github.com/ADCDS/sentry-gitea/releases) (once one is published), or build it
-from source with [uv](https://docs.astral.sh/uv/):
+[GitHub release](https://github.com/ADCDS/sentry-gitea/releases), or build it from source with
+[uv](https://docs.astral.sh/uv/):
 
 ```sh
 git clone https://github.com/ADCDS/sentry-gitea.git
 cd sentry-gitea
-uv build --wheel          # writes dist/sentry_gitea-0.2.0-py3-none-any.whl
+uv build --wheel          # writes dist/sentry_gitea-0.3.0-py3-none-any.whl
 ```
 
 Copy the wheel into the self-hosted checkout's `sentry/` directory. That directory is the image build
@@ -130,7 +159,7 @@ customizations, make it executable, and add:
 
 ```sh
 python -m pip install --no-deps --no-index --force-reinstall \
-    /usr/src/sentry/sentry_gitea-0.2.0-py3-none-any.whl
+    /usr/src/sentry/sentry_gitea-0.3.0-py3-none-any.whl
 ```
 
 The `--no-deps` flag is deliberate: the Sentry image already provides `requests` and `urllib3`, and
@@ -140,8 +169,19 @@ needs network access during the image build:
 
 ### 3. Configure Sentry: `sentry/sentry.conf.py`
 
-The **plugins** register through entry points. They need one setting only if your Gitea has a private
-or loopback address (see [Plugin base URLs](#security-notes)):
+On Sentry 26.6 and older the **plugins** register through entry points and need no setting. From
+Sentry 26.7 there are no plugin entry points; the plugins mode then needs these three lines (the
+integration's block below contains their equivalents, so skip them if you add that):
+
+```python
+# Installs the alert bridge in every Sentry process. Also lists Gitea under Integrations.
+SENTRY_DEFAULT_INTEGRATIONS += ("sentry_gitea.integration.provider.GiteaIntegrationProvider",)
+ROOT_URLCONF = "sentry_gitea.urls"  # serves the settings pages under /extensions/gitea/settings/
+TASKWORKER_IMPORTS = (*TASKWORKER_IMPORTS, "sentry_gitea.alerts.tasks")  # the delivery task
+```
+
+On every version, one more setting is needed only if your Gitea has a private or loopback address
+(see [Plugin base URLs](#security-notes)):
 
 ```python
 # Gitea origins that plugin base URLs may use on private networks:
@@ -180,8 +220,11 @@ GITEA_CLIENT_SECRET = "<oauth client secret>"
 | `GITEA_PUBLIC_URL` | no | Browser-facing URL used for the OAuth authorize redirect and for every generated issue/source link. Defaults to `GITEA_BASE_URL`. |
 | `GITEA_CLIENT_ID` / `GITEA_CLIENT_SECRET` | yes | The Gitea OAuth2 application (see below). Keep the secret out of version control. |
 | `GITEA_WEBHOOK_URL_PREFIX` | no | Base URL **Gitea** uses to deliver webhooks to Sentry. Defaults to Sentry's `system.url-prefix`, which is the recommended target. |
-| `TASKWORKER_IMPORTS` entry | yes | Registers the push backfill and identity refresh tasks with Sentry's taskworker. |
+| `TASKWORKER_IMPORTS` entry | yes | Registers the push backfill, identity refresh and alert delivery tasks with Sentry's taskworker. |
 | `TASKWORKER_SCHEDULES["gitea-identity-refresh"]` | recommended | Every 12 hours, refreshes Gitea identities that were not refreshed for 7 days, so refresh tokens of idle installations do not expire. |
+| `GITEA_ALERTS_BRIDGE` | no | Plugins only. `False` leaves Sentry's alert-action handlers alone. Alerts then reach Gitea only through the legacy plugin (Sentry 26.6 and older) or the [signed webhook](docs/PLUGINS.md#fallback-the-signed-webhook). Default `True`. |
+| `GITEA_ALERTS_WEBHOOK_TARGETS` | no | Plugins only. Slugs of Sentry Apps whose alert actions the bridge delivers itself, for rules [repointed to the internal app](docs/PLUGINS.md#rules-on-sentry-267-and-newer). |
+| `GITEA_ALERTS_WEBHOOK_URL` | no | Plugins only. Webhook URL given to the internal app when it is created. Defaults to Sentry's `system.url-prefix` plus `/extensions/gitea/alerts/`. |
 | `GITEA_PLUGIN_ALLOWED_BASE_URLS` | no | Plugins only. Origins (`scheme://host[:port]`) that a project's plugin base URL may use even when they resolve to private or loopback addresses. Defaults to the origins of `GITEA_BASE_URL` and `GITEA_PUBLIC_URL` when those are set, otherwise empty; setting it replaces that default. |
 
 If a required setting is missing, Gitea still appears in the integrations directory, and starting setup
@@ -194,7 +237,10 @@ sensitive.
 Rebuild the Sentry images and recreate **every** service that runs Sentry code (web, taskworker,
 taskscheduler, consumers). Re-running `./install.sh` in the self-hosted checkout does this. Alert
 delivery runs in taskworkers, so installing only into `web` is not enough. After a restart,
-`GET <sentry>/extensions/gitea/ping/` answers with the package version when `ROOT_URLCONF` is set.
+`GET <sentry>/extensions/gitea/ping/` answers with the package version when `ROOT_URLCONF` is set, and
+with `"alert_bridge": true` when the alert bridge is installed in the web process. Each Sentry process
+logs `sentry-gitea: alert bridge installed` once when it starts; look for it in a taskworker's log to
+confirm the workers too.
 
 ## Configure
 
@@ -203,13 +249,18 @@ delivery runs in taskworkers, so installing only into `web` is not enough. After
 1. In Gitea, create a personal access token with the scopes **`read:user`, `read:repository`,
    `write:issue`**. The token's user also needs repository rights to create issues and labels: scopes
    alone do not grant them.
-2. In Sentry, go to **Project Settings → Legacy Integrations → Gitea**, enable it, and set the base URL
-   (as reached from Sentry containers), an optional **Gitea URL for links**, the token, the repository
-   (`owner/name`) and optional default labels. Saving verifies the token and the repository. A base
-   URL on a private or loopback address must be listed in `GITEA_PLUGIN_ALLOWED_BASE_URLS`.
-3. Enable **Gitea Alerts** on the same project. It uses the Gitea plugin's credentials.
-4. Create an **issue alert** whose action sends a notification through the legacy service
-   **Gitea Alerts** (`gitea_alerts`). For repeat-event comments, see the trigger gotcha below.
+2. In Sentry, open `<sentry>/extensions/gitea/settings/<organization slug>/` and pick the project (on
+   Sentry 26.6 and older, **Project Settings → Legacy Integrations → Gitea** edits the same settings).
+   Tick **Issues** and set the base URL (as reached from Sentry containers), an optional **Gitea URL
+   for links**, the token, the repository (`owner/name`) and optional default labels. Saving verifies
+   the token and the repository. A base URL on a private or loopback address must be listed in
+   `GITEA_PLUGIN_ALLOWED_BASE_URLS`.
+3. Tick **Alerts** on the same page (the **Gitea Alerts** plugin on the legacy pages). It uses the
+   same credentials.
+4. Create an **issue alert** whose action sends a notification to **Gitea Alerts**: the legacy service
+   `gitea_alerts` on Sentry 26.6 and older, the internal Sentry App on 26.7 and newer
+   ([how to create it](docs/PLUGINS.md#rules-on-sentry-267-and-newer)). Rules created before a Sentry
+   upgrade keep working unchanged. For repeat-event comments, see the trigger gotcha below.
 
 Details, label colors, recovery semantics and logging: [docs/PLUGINS.md](docs/PLUGINS.md).
 
@@ -251,6 +302,16 @@ Details: [docs/INTEGRATION.md](docs/INTEGRATION.md).
   `database.encryption.method` option is `fernet` and Fernet keys are configured
   (`DATABASE_ENCRYPTION_SETTINGS`); the default method is `plaintext`. Protect the Sentry database,
   its backups and administrative access accordingly.
+- **Settings pages.** `/extensions/gitea/settings/...` require a signed-in user with `project:write`
+  or `project:admin` on the project (from an organization or a team role), as Sentry's project
+  settings API does and the plugin pages therefore did, and Sentry's CSRF protection applies.
+  The token is write-only: it is never sent back to the browser, and it is kept across a save only
+  while the base URL stays the same. Each save writes an audit-log entry.
+- **Alert webhook endpoint.** `/extensions/gitea/alerts/` accepts unauthenticated POSTs, like every
+  webhook receiver. A request is acted on only when the installation it names belongs to an internal
+  Sentry App whose webhook URL is this endpoint, its signature verifies against that app's client
+  secret, and the project it names belongs to the installation's organization. It can only queue an
+  alert for an issue of that organization; it returns no data.
 - **Webhook secrets.** Each repository hook is signed with its own secret, derived from the
   installation's webhook key and the Gitea repository ID. Gitea shows a hook's secret to the
   repository's admins in its web UI. A leaked secret can only forge deliveries for that one
@@ -328,6 +389,25 @@ Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
 If a release changes the webhook URL or signing, add each Gitea repository to Sentry again (the same
 `POST /api/0/organizations/<org>/repos/` call): adding an existing repository repairs its hook.
 
+### Upgrading Sentry itself
+
+Upgrade **this package first, Sentry second**, one step at a time:
+
+1. On the Sentry you run now, install sentry-gitea 0.3.0 as above. If you use the plugins without the
+   integration, add the three lines from [Configure Sentry](#3-configure-sentry-sentrysentryconfpy)
+   now. Check the ping answer for the new version and `"alert_bridge": true`, and let one alert rule
+   fire: from here on the bridge delivers it, as it will after the Sentry upgrade.
+2. Upgrade Sentry following its own hard stops. Copy the wheel and the `enhance-image.sh` line into
+   each new self-hosted checkout, as they are not part of Sentry's files.
+3. After reaching 26.7 or newer: project settings are at `/extensions/gitea/settings/<org>/`; existing
+   alert rules keep filing; to pick Gitea in the rule editor again, create the internal Sentry App
+   ([docs/PLUGINS.md](docs/PLUGINS.md#rules-on-sentry-267-and-newer)).
+
+What 0.2.0 does on a newer Sentry, and why the order matters: its webhook endpoint names an API owner
+that Sentry 26.5.0 no longer has, so the URL configuration fails to import and the web process does
+not start. On 26.7.0 and newer its plugins cannot be loaded at all, and alert rules that name them
+fire without error and without effect.
+
 ## Uninstall
 
 Remove things in this order, so that nothing is left pointing at code that is gone:
@@ -340,9 +420,12 @@ Remove things in this order, so that nothing is left pointing at code that is go
    Gitea**.
 3. **OAuth.** Each Gitea user who authorized Sentry revokes the grant in **Settings → Applications**.
    Then delete the OAuth2 application.
-4. **Plugins.** Remove alert-rule actions that use Gitea Alerts. In each project's plugin settings,
-   use **Reset Configuration** (this clears the stored token) and disable both plugins. Delete the
-   personal access tokens in Gitea.
+4. **Plugins.** Remove alert-rule actions that use Gitea Alerts, and the internal "Gitea Alerts"
+   Sentry App if you created one (**Organization Settings → Custom Integrations**). On Sentry 26.6 and
+   older, use **Reset Configuration** in each project's plugin settings (this clears the stored token)
+   and disable both plugins. On every version, **Delete saved settings** on the project's settings
+   page (`/extensions/gitea/settings/<org>/<project>/`) removes the same options, the token
+   included. Delete the personal access tokens in Gitea.
 5. **Configuration.** Remove every sentry-gitea line from `sentry/sentry.conf.py` (`ROOT_URLCONF`,
    `SENTRY_DEFAULT_INTEGRATIONS`, the pagination allowlist, `TASKWORKER_IMPORTS`, the
    `TASKWORKER_SCHEDULES` entry and all `GITEA_*` settings) and the `pip install` line from
@@ -354,7 +437,7 @@ Remove things in this order, so that nothing is left pointing at code that is go
 
 | Document | Contents |
 |---|---|
-| [docs/PLUGINS.md](docs/PLUGINS.md) | Project plugins: install, fields, allowed base URLs, alert rules, classification, recovery, limits, logging |
+| [docs/PLUGINS.md](docs/PLUGINS.md) | Project plugins: install, settings pages, allowed base URLs, alert rules, the alert bridge and its fallback, classification, recovery, limits, logging |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | Organization integration: OAuth app, settings, install, issues, repositories and webhooks, sync, source links, failures |
 | [docs/TESTING.md](docs/TESTING.md) | Test layers, the Docker harness and the end-to-end stack |
 
@@ -368,13 +451,14 @@ uv sync            # create .venv with the dev tools
 make unit          # host unit tests (never import Sentry)
 make lint          # ruff check + ruff format --check
 make sentry-tests  # tests/sentry inside ghcr.io/getsentry/sentry:26.3.1 with throwaway Postgres/Redis
+SENTRY_IMAGE=ghcr.io/getsentry/sentry:26.11.0 make sentry-tests   # the same against another Sentry
 ```
 
 | Layer | Command | Runs where | In CI |
 |---|---|---|---|
 | Unit | `make unit` | Host. Pure `api/` and `render` code, with HTTP mocked by `responses` | Yes |
 | Harness | `uv run pytest tests/e2e -m "not e2e"` | Host. E2E helper and installer logic, no stack needed | Yes |
-| Sentry-level | `make sentry-tests` | The pinned Sentry image plus disposable Postgres 14 and Redis 6.2, using Sentry's pytest plugin. No Snuba/Kafka | Yes |
+| Sentry-level | `make sentry-tests` | A Sentry image (`SENTRY_IMAGE`, default 26.3.1) plus disposable Postgres 14 and Redis 6.2, using Sentry's pytest plugin. No Snuba/Kafka | Yes, against 26.3.1, 26.5.0, 26.7.0 and 26.11.0 |
 | End-to-end | see below | A real self-hosted Sentry 26.3.1 (errors-only) plus `gitea/gitea:28.1.0` | No, local/manual |
 
 E2E tests need a dedicated self-hosted Sentry 26.3.1 checkout. Do not use a production one: the

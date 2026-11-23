@@ -30,14 +30,32 @@ class GiteaIntegration(GiteaIssueSync, GiteaIssues, GiteaSource):
         return GiteaIntegrationClient(self, identity)
 
     def get_repositories(
-        self, query: str | None = None, page_number_limit: int | None = None
+        self,
+        query: str | None = None,
+        page_number_limit: int | None = None,
+        accessible_only: bool = False,
+        use_cache: bool = False,
+        raise_on_page_limit: bool = False,
+        parallel: bool = False,
+        **kwargs: Any,
     ) -> list[dict[str, Any]]:
+        """Repositories of the installation's owner.
+
+        Sentry 26.5 added `accessible_only`, `use_cache` and `raise_on_page_limit`, and 26.7
+        `parallel`; its repository picker passes them by keyword, and reads `external_id` from
+        every row to mark the repositories that are already added. None of the flags changes
+        the answer here: the search is already confined to the installation's owner and every
+        row is verified, nothing is cached, and pages are fetched in order. Unknown keywords
+        are accepted so that the next addition does not turn the picker into a 500.
+        """
         with self._issue_operation():
             rows = self.get_client().search_repositories(query, page_number_limit, issues=False)
             return [
                 {
                     "identifier": row["full_name"],
                     "name": row["full_name"],
+                    # The same value add-repository stores as Repository.external_id.
+                    "external_id": str(row["id"]),
                     "default_branch": row.get("default_branch") or "main",
                 }
                 for row in rows

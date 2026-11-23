@@ -1,6 +1,9 @@
 """Add Repository (real endpoint), the signed hook lifecycle and release commit ranges."""
 
+import contextlib
+import importlib.util
 import json
+from unittest import mock
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
@@ -239,7 +242,13 @@ class TestRepositoryDeletion(SyncFixture):
         assert repo.external_id != "41"  # renamed while pending deletion
         responses.get(API + "/repositories/41", json=WEBHOOK_REPO)
         responses.delete(HOOKS + "/4", status=204)
-        with self.tasks():
+        # From 26.5 the deletion also queues Sentry's own notification to Seer, which is not
+        # ours and has nothing to call in this environment.
+        seer = "sentry.deletions.defaults.repository.notify_seer_repository_deleted"
+        with contextlib.ExitStack() as stack:
+            if importlib.util.find_spec("sentry.deletions.tasks.seer"):
+                stack.enter_context(mock.patch(seer))
+            stack.enter_context(self.tasks())
             run_scheduled_deletions()
         assert not Repository.objects.filter(id=repo.id).exists()
         # Sentry signals pending_delete on both deletion passes; removal is idempotent.

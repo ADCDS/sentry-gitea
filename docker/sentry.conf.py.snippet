@@ -1,12 +1,15 @@
 # BEGIN sentry-gitea
+# Registers the integration and, in every Sentry process, installs the alert bridge that
+# delivers "Gitea Alerts" rule actions (required for alerts on Sentry 26.7 and newer).
 SENTRY_DEFAULT_INTEGRATIONS += (
     "sentry_gitea.integration.provider.GiteaIntegrationProvider",
 )
+# Adds /extensions/gitea/... (settings pages, install, webhooks, ping); keeps Sentry's routes.
 ROOT_URLCONF = "sentry_gitea.urls"
 # Like Sentry's own SCM search endpoints, exempt from the DEBUG-only pagination check.
 SENTRY_API_PAGINATION_ALLOWLIST = set(SENTRY_API_PAGINATION_ALLOWLIST) | {"GiteaSearchEndpoint"}
-# Registers the push-backfill and OAuth keep-alive tasks (integrations namespace) in web,
-# worker and scheduler.
+# Registers the push-backfill, OAuth keep-alive and alert-delivery tasks (integrations
+# namespace) in web, worker and scheduler.
 TASKWORKER_IMPORTS = (*TASKWORKER_IMPORTS, "sentry_gitea.integration.tasks")
 # Keeps idle installations authorized: Gitea refresh tokens expire after
 # REFRESH_TOKEN_EXPIRATION_TIME (730 h by default) unless used. Run by the taskscheduler service.
@@ -15,6 +18,11 @@ TASKWORKER_SCHEDULES["gitea-identity-refresh"] = {
     "task": "integrations:sentry_gitea.integration.refresh_identities",
     "schedule": timedelta(hours=12),
 }
+# Plugins mode (project tokens, alerts), all optional:
+# GITEA_PLUGIN_ALLOWED_BASE_URLS = ("http://gitea:3000",)  # private origins projects may use
+# GITEA_ALERTS_BRIDGE = False  # leave Sentry's alert-action handlers alone (docs/PLUGINS.md)
+# GITEA_ALERTS_WEBHOOK_TARGETS = ("<slug of the internal Gitea Alerts app>",)
+# GITEA_ALERTS_WEBHOOK_URL = "https://sentry.example.com/extensions/gitea/alerts/"
 # Organization integration OAuth settings: literal values, the same for web and workers.
 # GITEA_BASE_URL = "http://gitea:3000"  # how Sentry's containers reach Gitea
 # GITEA_PUBLIC_URL = "https://gitea.example.com"  # how browsers reach Gitea (optional)

@@ -1,8 +1,9 @@
 # Testing sentry-gitea
 
-The tests target **Sentry 26.3.1** (Python 3.13 in its image) and **Gitea 28.1.0**. Sentry
-26.3.1 is FSL-1.1 licensed: it is used only as the runtime image and as a reference for
-interfaces, and no code is copied from it. The autouse fixtures in `tests/sentry/conftest.py`
+The Sentry-level tests run against **Sentry 26.3.1, 26.5.0, 26.7.0 and 26.11.0** (the image's
+own Python), the end-to-end suite against 26.3.1, both with **Gitea 28.1.0**. Sentry 26.x is
+FSL-1.1 licensed: it is used only as the runtime image and as a reference for interfaces, and no
+code is copied from it. The autouse fixtures in `tests/sentry/conftest.py`
 are adapted from **Sentry 24.10.0** (Apache-2.0) and listed in [NOTICE](../NOTICE). The
 `fixtures` package and everything else in the test tree are original.
 
@@ -12,7 +13,7 @@ are adapted from **Sentry 24.10.0** (Apache-2.0) and listed in [NOTICE](../NOTIC
 | --- | --- | --- | --- |
 | Unit | `make unit` | Host. Pure `api/`, `render` and webhook code, HTTP mocked with `responses`. Never imports Sentry. | Yes |
 | Harness | `make harness-tests`, or `uv run pytest tests/e2e -m "not e2e"` for all of them | Host. Installer, bootstrap, browser and E2E helper logic, HTTP and Docker mocked. | Yes (all) |
-| Sentry-level | `make sentry-tests` | `ghcr.io/getsentry/sentry:26.3.1` with disposable Postgres and Redis, using Sentry's pytest plugin. No Snuba or Kafka. | Yes |
+| Sentry-level | `make sentry-tests` | The Sentry image named by `SENTRY_IMAGE` (default `ghcr.io/getsentry/sentry:26.3.1`) with disposable Postgres and Redis, using Sentry's pytest plugin. No Snuba or Kafka. | Yes, once per tested Sentry version |
 | End-to-end | see [End-to-end tests](#end-to-end-tests) | A real self-hosted Sentry 26.3.1 (errors-only) plus `gitea/gitea:28.1.0`. | No, local |
 
 `make lint` runs `ruff check .` and `ruff format --check .`; ruff also checks the Python code
@@ -58,7 +59,21 @@ make lint
 ```sh
 make sentry-tests
 make sentry-tests SENTRY_TEST_WORKERS=1   # on a busy host
+SENTRY_IMAGE=ghcr.io/getsentry/sentry:26.11.0 make sentry-tests   # another Sentry version
 ```
+
+`SENTRY_IMAGE` selects the Sentry the suite runs in. CI runs it against 26.3.1, 26.5.0, 26.7.0
+and 26.11.0; run at least the oldest and the newest before proposing a change. Sentry 26.7
+removed legacy plugins, and the suite adapts by itself (the pytest header says which case it
+found):
+
+- `test_issue_plugin.py` (the legacy settings form and the sidebar's create, link and unlink
+  views) is collected only where those classes exist.
+- `test_alerts_plugin.py`, the alert behaviour suite, runs everywhere. With legacy plugins it
+  drives the `gitea_alerts` plugin; without them it calls the shared delivery code directly
+  through small stand-ins, and the few tests of the plugin classes themselves are skipped.
+- Everything else (the bridge, the settings pages, the signed webhook, the internal app, the
+  migration tool and the integration) runs unchanged on every version.
 
 This builds a wheel with `uv build --wheel`, starts disposable Postgres and Redis, installs the
 wheel in the test container with `pip --no-deps --no-index --force-reinstall`, and runs

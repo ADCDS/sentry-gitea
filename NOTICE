@@ -22,3 +22,7 @@ Adapted files:
   sentry 24.10.0 tests/conftest.py (validate_silo_mode, setup_simulate_on_commit,
   setup_enforce_monotonic_transactions, clear_caches, check_leaked_responses_mocks).
   Copyright Functional Software, Inc. dba Sentry. Apache License 2.0.
+- src/sentry_gitea/integration/install.py — the checks made before an installation
+  pipeline starts (`_feature_enabled` and `GiteaInstallView.handle`) adapted from
+  sentry 24.10.0 src/sentry/integrations/web/organization_integration_setup.py.
+  Copyright Functional Software, Inc. dba Sentry. Apache License 2.0.

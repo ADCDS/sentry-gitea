@@ -1,3 +1,4 @@
+import importlib
 from types import SimpleNamespace
 
 import pytest
@@ -7,22 +8,30 @@ from sentry.api.serializers import serialize
 from sentry.core.endpoints.organization_details import OrganizationDetailsEndpoint
 from sentry.integrations.api.serializers.models.integration import IntegrationProviderSerializer
 from sentry.integrations.manager import default_manager as integrations
-from sentry.plugins.base import plugins
 
 from sentry_gitea import __version__
 from sentry_gitea.integration.provider import GiteaIntegrationProvider
 from sentry_gitea.meta import AUTHOR, ISSUES_URL, PROJECT_URL
-from sentry_gitea.plugins.alerts import GiteaAlertsPlugin
-from sentry_gitea.plugins.issue import GiteaIssuePlugin
+
+try:  # Sentry 26.7 removed legacy plugins; the entry points are then never loaded.
+    from sentry.plugins.base import plugins
+except ImportError:
+    plugins = None
 
 
+@pytest.mark.skipif(plugins is None, reason="this Sentry has no legacy plugins")
 @pytest.mark.parametrize(
-    ("slug", "plugin_class"), [("gitea", GiteaIssuePlugin), ("gitea_alerts", GiteaAlertsPlugin)]
+    ("slug", "plugin_class"),
+    [
+        ("gitea", "sentry_gitea.plugins.issue.GiteaIssuePlugin"),
+        ("gitea_alerts", "sentry_gitea.plugins.alerts.GiteaAlertsPlugin"),
+    ],
 )
 def test_plugins_discovered_from_installed_entry_points(slug, plugin_class) -> None:
+    module, _, name = plugin_class.rpartition(".")
     plugin = plugins.get(slug)
-    assert isinstance(plugin, plugin_class)
-    assert plugin.version == __version__ == "0.2.0"
+    assert isinstance(plugin, getattr(importlib.import_module(module), name))
+    assert plugin.version == __version__ == "0.3.0"
     assert (plugin.author, plugin.author_url) == (AUTHOR, PROJECT_URL)
     assert ("Source", PROJECT_URL) in plugin.resource_links
     assert ("Bug Tracker", ISSUES_URL) in plugin.resource_links
@@ -54,7 +63,9 @@ def test_provider_registered_from_settings_and_serializable() -> None:
 def test_ping_without_authentication() -> None:
     response = Client().get("/extensions/gitea/ping/")
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "version": __version__}
+    body = response.json()
+    assert body["ok"] is True and body["version"] == __version__
+    assert isinstance(body["alert_bridge"], bool)
 
 
 @override_settings(ROOT_URLCONF="sentry_gitea.urls")

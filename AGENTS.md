@@ -1,18 +1,22 @@
 # sentry-gitea — instructions for coding agents
 
-Open-source (Apache-2.0) Gitea integration for **self-hosted Sentry 26.3.1**, targeting
-**Gitea 28.1.0**. It is installed into the Sentry image with pip (self-hosted
-`sentry/enhance-image.sh`). Sentry is NOT a pip dependency: it is provided by the host image
-`ghcr.io/getsentry/sentry:26.3.1`. The package has two modes, the **plugins** and the
-**integration**; use those names in code, docs and messages.
+Open-source (Apache-2.0) Gitea integration for **self-hosted Sentry**, supported at **26.3.1,
+26.5.0, 26.7.0 and 26.11.0**, targeting **Gitea 28.1.0**. It is installed into the Sentry image
+with pip (self-hosted `sentry/enhance-image.sh`). Sentry is NOT a pip dependency: it is provided
+by the host image `ghcr.io/getsentry/sentry:<version>`. The package has two modes, the
+**plugins** and the **integration**; use those names in code, docs and messages. Sentry 26.7
+removed legacy plugins: the plugins mode keeps its name there, and its alert code lives in
+`alerts/`, which must work without `sentry.plugins` (the one guarded probe for a registered
+legacy plugin in `alerts/bridge.py` is the only place that touches it).
 
 Human contributors follow the same rules: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Hard rules
 
 1. **Licensing (most important).** Sentry 26.x is FSL-1.1 (source-available, not open source).
-   - You may read Sentry 26.3.1's source to learn interfaces, base classes, method signatures and
-     behavior. You must NOT copy or closely paraphrase code from it.
+   - You may read the source of the supported Sentry 26.x releases to learn interfaces, base
+     classes, method signatures and behavior. You must NOT copy or closely paraphrase code from
+     them.
    - The only Sentry code you may adapt is from **Sentry 24.10.0, or a release you verified is
      already Apache-2.0** (FSL releases convert two years after publication). When you adapt
      anything, add the upstream path to the "Adapted files" list in `NOTICE` and keep a short
@@ -32,8 +36,14 @@ src/sentry_gitea/
   api/client.py      pure Gitea REST client (requests; timeouts; pagination and byte budgets)
   api/webhooks.py    X-Gitea-Signature verification (hmac.compare_digest), payload parsing
   render.py          issue title/body/labels/severity: pure functions, no Sentry imports
+  alerts/            the plugins mode without plugin classes; runs on every supported Sentry:
+                     core (settings, client, link, lock), delivery (file / comment / re-file),
+                     tasks (the delivery task), bridge (wraps two workflow-engine action
+                     handlers and queues that task), webhook (signed Sentry App webhook
+                     fallback, queues it too), pages (settings pages), app, migrate
   plugins/issue.py   GiteaIssuePlugin(IssuePlugin2)        (entry point sentry.plugins: gitea)
   plugins/alerts.py  GiteaAlertsPlugin(NotificationPlugin) (entry point sentry.plugins: gitea_alerts)
+                     thin wrappers over alerts/; importable only on Sentry 26.6 and older
   integration/       IntegrationProvider and installation, identity, issues, sync, repositories,
                      webhooks, tasks, source links
   urls.py            ROOT_URLCONF shim: our /extensions/gitea/ routes + include("sentry.conf.urls")
@@ -52,8 +62,11 @@ Modules under `api/` and `render.py` must stay importable without Sentry so unit
 - Lint and format: `make lint` (`ruff check .` and `ruff format --check .`; ruff also formats
   Python code blocks in Markdown).
 - Harness tests: `.venv/bin/pytest tests/e2e -m "not e2e" -q`.
-- Sentry-level tests: `make sentry-tests` (Docker). End-to-end: see `docs/TESTING.md`; it needs a
-  dedicated self-hosted Sentry and must not run alongside another heavy workload.
+- Sentry-level tests: `make sentry-tests` (Docker), against `SENTRY_IMAGE` (default 26.3.1). A
+  change must pass on every supported version; run at least
+  `SENTRY_IMAGE=ghcr.io/getsentry/sentry:26.11.0 make sentry-tests` as well, and CI runs all four.
+  End-to-end: see `docs/TESTING.md`; it needs a dedicated self-hosted Sentry and must not run
+  alongside another heavy workload.
 
 ## Conventions
 
@@ -73,6 +86,9 @@ Modules under `api/` and `render.py` must stay importable without Sentry so unit
 - Tests first for every behavior, in the lowest layer that can prove it. Mock HTTP with
   `responses`.
 - When behavior or configuration changes, update `README.md` and the matching file in `docs/`.
+- Sentry interfaces differ between the supported versions. Prefer one code path that works on
+  all of them; where that is impossible, detect the difference by capability (an import, an
+  attribute), never by comparing version numbers, and cover both branches in `tests/sentry`.
 
 ## Reporting
 

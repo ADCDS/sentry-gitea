@@ -175,6 +175,11 @@ class GiteaIntegrationProvider(IntegrationProvider):
         bindings.add(
             "integration-repository.provider", GiteaRepositoryProvider, id="integrations:gitea"
         )
+        # Alert rules that named the legacy `gitea_alerts` plugin keep delivering (see the
+        # module): from Sentry 26.7 nothing else would handle them.
+        from sentry_gitea.alerts import bridge
+
+        bridge.install()
 
     def get_pipeline_views(self) -> list[Any]:
         return [

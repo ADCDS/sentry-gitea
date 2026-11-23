@@ -1,4 +1,11 @@
-"""Notification adapters need Postgres and Redis, with no event storage backend."""
+"""What an alert does in Gitea: file, comment, skip, file again. Needs Postgres and Redis.
+
+On a Sentry with legacy plugins the tests drive the `gitea_alerts` plugin, as Sentry's rule
+action does. On Sentry 26.7 and newer there are no plugin classes; the same tests then call
+the shared delivery directly (the code the bridge runs), through small stand-ins that expose
+the handful of plugin methods used here over the same storage. Tests of the plugin classes
+themselves (settings form, rule action, inherited limiter) only run where those exist.
+"""
 
 import json
 import time
@@ -18,20 +25,64 @@ from sentry.locks import locks
 from sentry.models.activity import Activity
 from sentry.models.grouplink import GroupLink
 from sentry.models.groupmeta import GroupMeta
-from sentry.plugins.base import plugins
-from sentry.rules.actions.notify_event import NotifyEventAction
-from sentry.rules.actions.notify_event_service import NotifyEventServiceAction
+from sentry.models.options.project_option import ProjectOption
 from sentry.testutils.cases import TestCase
 from sentry.types.activity import ActivityType
-from sentry.types.rules import RuleFuture
 from sentry.utils.locking import UnableToAcquireLock
 
+from sentry_gitea.alerts import core, delivery
+from sentry_gitea.alerts.core import BLOCKED_ADDRESS, group_lock
+from sentry_gitea.alerts.delivery import LOCK_WAIT
 from sentry_gitea.api.client import REQUEST_ALLOWANCE, TIMEOUT, GiteaClient
 from sentry_gitea.api.errors import GiteaApiError
 from sentry_gitea.meta import AUTHOR, ISSUES_URL, PROJECT_URL
-from sentry_gitea.plugins.alerts import LOCK_WAIT
-from sentry_gitea.plugins.issue import BLOCKED_ADDRESS, GiteaIssuePlugin, group_lock
 from sentry_gitea.render import parse_metadata, render_body
+
+try:  # Sentry 26.7 removed legacy plugins and the rule actions that called them.
+    from sentry.plugins.base import plugins
+    from sentry.rules.actions.notify_event import NotifyEventAction
+    from sentry.rules.actions.notify_event_service import NotifyEventServiceAction
+    from sentry.types.rules import RuleFuture
+
+    LEGACY = True
+except ImportError:
+    LEGACY = False
+
+legacy_only = pytest.mark.skipif(not LEGACY, reason="this Sentry has no legacy plugin classes")
+
+
+class StoredSettings:
+    """The plugin methods these tests use, over the project options the plugins wrote."""
+
+    def __init__(self, slug):
+        self.slug = slug
+
+    def enable(self, project):
+        ProjectOption.objects.set_value(project, f"{self.slug}:enabled", True)
+
+    def disable(self, project):
+        ProjectOption.objects.set_value(project, f"{self.slug}:enabled", False)
+
+    def set_option(self, name, value, project):
+        ProjectOption.objects.set_value(project, f"{self.slug}:{name}", value)
+
+    def get_option(self, name, project):
+        return core.option(project, self.slug, name)
+
+
+class IssueStandIn(StoredSettings):
+    read_link = staticmethod(core.read_link)
+    write_link = staticmethod(core.write_link)
+    event_data = staticmethod(core.event_data)
+    is_configured = staticmethod(core.is_configured)
+
+
+class AlertsStandIn(StoredSettings):
+    is_configured = staticmethod(core.alerts_ready)
+
+    def notify_users(self, group, event, triggering_rules):
+        delivery.deliver(group, event)
+
 
 BASE = "https://forge.example/git"
 PUBLIC = "https://public-forge.example/browser"
@@ -60,8 +111,12 @@ class FakeClock:
 class TestGiteaAlertsPlugin(TestCase):
     def setUp(self):
         super().setUp()
-        self.issue_plugin = plugins.get("gitea")
-        self.plugin = plugins.get("gitea_alerts")
+        if LEGACY:
+            self.issue_plugin = plugins.get("gitea")
+            self.plugin = plugins.get("gitea_alerts")
+        else:
+            self.issue_plugin = IssueStandIn(core.ISSUE_SLUG)
+            self.plugin = AlertsStandIn(core.ALERTS_SLUG)
         for plugin in [self.issue_plugin, self.plugin]:
             plugin.enable(self.project)
         for name, value in {"base_url": BASE, "repo": "owner/repo", "token": TOKEN}.items():
@@ -149,6 +204,7 @@ class TestGiteaAlertsPlugin(TestCase):
         assert metadata["severity"] == "high"
         assert metadata["class"] == "crash"
 
+    @legacy_only
     def test_config_defaults_dependency_and_no_duplicate_credentials(self):
         assert (self.plugin.author, self.plugin.author_url) == (AUTHOR, PROJECT_URL)
         assert ("Bug Tracker", ISSUES_URL) in self.plugin.resource_links
@@ -189,7 +245,8 @@ class TestGiteaAlertsPlugin(TestCase):
         link = self.issue_plugin.read_link(self.group)
         assert link["id"] == "7"
         assert link["url"] == BASE + "/owner/repo/issues/7"
-        assert self.issue_plugin.get_issue_label(self.group, "7") == "owner/repo#7"
+        if LEGACY:  # the label Sentry's plugin sidebar showed
+            assert self.issue_plugin.get_issue_label(self.group, "7") == "owner/repo#7"
         created = self.created_issue_payload()
         assert set(created["labels"]) == {1, 2, 3, 4}
         assert parse_metadata(created["body"])["class"] == "crash"
@@ -220,6 +277,7 @@ class TestGiteaAlertsPlugin(TestCase):
         self.notify()
         assert all(c.request.method == "GET" for c in responses.calls[before:])
 
+    @legacy_only
     @responses.activate
     def test_configuration_test_is_read_only(self):
         self.mock_repo()
@@ -245,8 +303,8 @@ class TestGiteaAlertsPlugin(TestCase):
     @responses.activate
     def test_remote_success_local_failure_recovers_marker_without_duplicate_create(self):
         self.mock_create()
-        with patch.object(
-            GiteaIssuePlugin, "write_link", side_effect=RuntimeError("DB unavailable")
+        with patch(
+            "sentry_gitea.alerts.core.write_link", side_effect=RuntimeError("DB unavailable")
         ) as write_link:
             with self.assertLogs("sentry_gitea.plugins.alerts", level="ERROR") as logs:
                 with self.assertRaises(PluginError):
@@ -271,6 +329,7 @@ class TestGiteaAlertsPlugin(TestCase):
             == 1
         )
 
+    @legacy_only
     @responses.activate
     def test_public_url_controls_alert_link_and_does_not_change_repeat_binding(self):
         self.issue_plugin.set_option("public_url", PUBLIC, self.project)
@@ -302,6 +361,7 @@ class TestGiteaAlertsPlugin(TestCase):
         assert self.issue_plugin.read_link(self.group)["url"] == PUBLIC + "/owner/repo/issues/7"
         assert all(c.request.method == "GET" for c in responses.calls)
 
+    @legacy_only
     @responses.activate
     def test_configuration_change_displays_old_link_and_refuses_automatic_writes(self):
         self.mock_create()
@@ -338,8 +398,8 @@ class TestGiteaAlertsPlugin(TestCase):
         """R3-7: a busy group lock is retried for at most LOCK_WAIT seconds, then skipped."""
         clock = FakeClock()
         with (
-            patch("sentry_gitea.plugins.issue.time", clock),
-            patch("sentry_gitea.plugins.issue.locks.get") as lock,
+            patch("sentry_gitea.alerts.core.time", clock),
+            patch("sentry_gitea.alerts.core.locks.get") as lock,
         ):
             lock.return_value.acquire.side_effect = UnableToAcquireLock("busy")
             with self.assertLogs("sentry_gitea.plugins.alerts", level="WARNING") as logs:
@@ -374,19 +434,20 @@ class TestGiteaAlertsPlugin(TestCase):
             return lock
 
         with (
-            patch("sentry_gitea.plugins.issue.time", clock),
-            patch("sentry_gitea.plugins.issue.locks.get", side_effect=get),
+            patch("sentry_gitea.alerts.core.time", clock),
+            patch("sentry_gitea.alerts.core.locks.get", side_effect=get),
         ):
             self.notify()
         assert len(attempts) == 3 and sum(clock.slept) < LOCK_WAIT
         self.created_issue_payload()
         assert self.issue_plugin.read_link(self.group)["id"] == "7"
 
+    @legacy_only
     def test_manual_operations_do_not_wait_for_the_lock(self):
         clock = FakeClock()
         with (
-            patch("sentry_gitea.plugins.issue.time", clock),
-            patch("sentry_gitea.plugins.issue.locks.get") as lock,
+            patch("sentry_gitea.alerts.core.time", clock),
+            patch("sentry_gitea.alerts.core.locks.get") as lock,
         ):
             lock.return_value.acquire.side_effect = UnableToAcquireLock("busy")
             with self.assertRaises(UnableToAcquireLock):
@@ -443,7 +504,7 @@ class TestGiteaAlertsPlugin(TestCase):
             )
             yield
 
-        with patch("sentry_gitea.plugins.issue.locks.get") as get_lock:
+        with patch("sentry_gitea.alerts.core.locks.get") as get_lock:
             get_lock.return_value.acquire.side_effect = acquire
             self.notify()
         get_lock.assert_called_once_with(
@@ -469,7 +530,7 @@ class TestGiteaAlertsPlugin(TestCase):
         # Patching time.monotonic itself also changes Sentry/Redis's process-wide clock.
         # Replace only our modules' time bindings, keeping their deadline units identical.
         with (
-            patch("sentry_gitea.plugins.issue.time", clock),
+            patch("sentry_gitea.alerts.core.time", clock),
             patch("sentry_gitea.api.client.time", clock),
             patch.object(
                 GiteaClient, "compare_commits", autospec=True, side_effect=slow_compare
@@ -507,6 +568,7 @@ class TestGiteaAlertsPlugin(TestCase):
         assert logs.records[0].getMessage().startswith("sentry-gitea: alert delivery failed")
         assert TOKEN not in str(logs.output)
 
+    @legacy_only
     @responses.activate
     def test_both_action_routes_and_swallowed_failures_still_log(self):
         responses.get(API, status=500, body=TOKEN)
@@ -523,6 +585,7 @@ class TestGiteaAlertsPlugin(TestCase):
                 callback(self.event, [RuleFuture(rule=rule, kwargs={})])
             assert TOKEN not in str(logs.output)
 
+    @legacy_only
     def test_inherited_limiter_is_preserved(self):
         with patch(
             "sentry.plugins.bases.notify.ratelimits.backend.is_limited", return_value=True
@@ -667,8 +730,8 @@ class TestGiteaAlertsPlugin(TestCase):
     def test_lost_refile_link_recovers_the_new_open_issue_never_the_closed_one(self):
         self.file_then_close(closed_ago=timedelta(days=2))
         self.regress(timedelta(hours=1))
-        with patch.object(
-            GiteaIssuePlugin, "write_link", side_effect=RuntimeError("DB unavailable")
+        with patch(
+            "sentry_gitea.alerts.core.write_link", side_effect=RuntimeError("DB unavailable")
         ):
             with self.assertLogs("sentry_gitea.plugins.alerts", level="ERROR"):
                 with self.assertRaises(PluginError):
@@ -717,6 +780,7 @@ class TestAlertsReadFreshOptions(TestCase):
     """Regression: task workers never fire request_finished, so Sentry's thread-local
     project-option cache went stale and alerts used old labels/credentials."""
 
+    @legacy_only
     def test_should_notify_drops_stale_thread_local_options(self):
         from sentry.models.options.project_option import ProjectOption
 
@@ -755,6 +819,7 @@ class TestAlertsSeeEnablingWithoutRestart(TestCase):
         stale.update(overrides)
         manager._option_cache[manager._make_key(self.project.id)] = stale
 
+    @legacy_only
     def test_rule_action_uses_current_enabled_state(self):
         issue_plugin = plugins.get("gitea")
         alerts = plugins.get("gitea_alerts")
