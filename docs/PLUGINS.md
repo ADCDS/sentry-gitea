@@ -28,11 +28,11 @@ commenting on after it.
 Build a wheel from this checkout with `uv build --wheel`. Copy the resulting wheel
 into the self-hosted checkout's `sentry/` directory. Add an installation command to
 that checkout's executable `sentry/enhance-image.sh`, preserving any existing image
-customizations. For version 0.3.0 the command is:
+customizations. For version 0.3.1 the command is:
 
 ```sh
 python -m pip install --no-deps --no-index --force-reinstall \
-    /usr/src/sentry/sentry_gitea-0.3.0-py3-none-any.whl
+    /usr/src/sentry/sentry_gitea-0.3.1-py3-none-any.whl
 ```
 
 Use the exact filename produced by the build when installing a different version.

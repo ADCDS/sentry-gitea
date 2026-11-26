@@ -277,6 +277,39 @@ class TestAssigneeSync(EventlessSyncFixture):
         assert not methods("PATCH")
 
     @responses.activate
+    def test_gitea_assignment_is_attributed_to_the_integration(self):
+        try:
+            from sentry.issues.action_log import SYSTEM_ACTOR, ActionContext, get_action_context
+        except ImportError:
+            self.skipTest("this Sentry has no issue action log")
+        self.add_repo()
+        self.link_issue()
+        self.enable(sync_assignee_reverse=True, user_mappings={self.user.email: "alice"})
+        seen = []
+        real_assign, real_deassign = GroupAssignee.objects.assign, GroupAssignee.objects.deassign
+
+        def record(real):
+            def call(*args, **kwargs):
+                seen.append(get_action_context())
+                return real(*args, **kwargs)
+
+            return call
+
+        self.mock_issue(assignees=[{"id": 5, "login": "alice"}])
+        with (
+            patch.object(GroupAssignee.objects, "assign", record(real_assign)),
+            patch.object(GroupAssignee.objects, "deassign", record(real_deassign)),
+            self.assertNoLogs("sentry.issues.action_log.publish", level="ERROR"),
+        ):
+            assert self.signed("issues", self.issue_payload("assigned")).status_code == 204
+            responses.replace(responses.GET, ISSUE, json=self.remote_issue(assignees=None))
+            assert self.signed("issues", self.issue_payload("unassigned")).status_code == 204
+        assert not GroupAssignee.objects.filter(group=self.group).exists()
+        # One assign, one deassign, each attributed like Sentry's own inbound sync.
+        assert seen == [ActionContext(source="gitea", actor=SYSTEM_ACTOR)] * 2
+        assert get_action_context() is None  # the scope does not leak past the request
+
+    @responses.activate
     def test_unmapped_gitea_assignees_leave_sentry_unchanged(self):
         self.add_repo()
         self.link_issue()

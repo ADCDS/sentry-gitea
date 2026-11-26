@@ -8,12 +8,12 @@ installed into the Sentry image with pip. You can create and link Gitea issues f
 open them automatically when alert rules fire. An organization integration based on OAuth adds
 owner-scoped install and search, issue sync, commit tracking, stack-trace links and CODEOWNERS.
 
-> **Status: alpha** (version `0.3.0`). The Sentry-level tests run against **self-hosted Sentry 26.3.1,
+> **Status: alpha** (version `0.3.1`). The Sentry-level tests run against **self-hosted Sentry 26.3.1,
 > 26.5.0, 26.7.0 and 26.11.0**; the end-to-end suite has only been run against 26.3.1 (errors-only
 > profile). Gitea is **28.1.0**. Other versions, and Gitea forks such as Forgejo, are untested. Expect
 > breaking changes before 1.0. It is not on PyPI yet.
 >
-> **Upgrading Sentry past 26.3?** Install sentry-gitea 0.3.0 first. Version 0.2.0 stops Sentry's web
+> **Upgrading Sentry past 26.3?** Install sentry-gitea 0.3.0 or later first. Version 0.2.0 stops Sentry's web
 > process from starting on 26.5.0, and from 26.7.0 its alert rules fire without doing anything. See
 > [Sentry versions](#sentry-versions) and [Upgrade](#upgrade).
 
@@ -146,7 +146,7 @@ PyPI publication is planned but has not happened yet. Download the wheel attache
 ```sh
 git clone https://github.com/ADCDS/sentry-gitea.git
 cd sentry-gitea
-uv build --wheel          # writes dist/sentry_gitea-0.3.0-py3-none-any.whl
+uv build --wheel          # writes dist/sentry_gitea-0.3.1-py3-none-any.whl
 ```
 
 Copy the wheel into the self-hosted checkout's `sentry/` directory. That directory is the image build
@@ -159,7 +159,7 @@ customizations, make it executable, and add:
 
 ```sh
 python -m pip install --no-deps --no-index --force-reinstall \
-    /usr/src/sentry/sentry_gitea-0.3.0-py3-none-any.whl
+    /usr/src/sentry/sentry_gitea-0.3.1-py3-none-any.whl
 ```
 
 The `--no-deps` flag is deliberate: the Sentry image already provides `requests` and `urllib3`, and
@@ -393,7 +393,7 @@ If a release changes the webhook URL or signing, add each Gitea repository to Se
 
 Upgrade **this package first, Sentry second**, one step at a time:
 
-1. On the Sentry you run now, install sentry-gitea 0.3.0 as above. If you use the plugins without the
+1. On the Sentry you run now, install sentry-gitea 0.3.0 or later as above. If you use the plugins without the
    integration, add the three lines from [Configure Sentry](#3-configure-sentry-sentrysentryconfpy)
    now. Check the ping answer for the new version and `"alert_bridge": true`, and let one alert rule
    fire: from here on the bridge delivers it, as it will after the Sentry upgrade.
