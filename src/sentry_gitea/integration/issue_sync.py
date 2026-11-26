@@ -14,7 +14,7 @@ import json
 import logging
 import re
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from typing import Any
 
 from django.core.exceptions import ValidationError
@@ -37,6 +37,11 @@ from sentry.users.services.user.service import user_service
 from sentry.utils.locking import UnableToAcquireLock
 
 from sentry_gitea.api.client import issue_number
+
+try:  # Sentry's issue action log (in 26.7.0, not 26.5.0) attributes each assignment to a source.
+    from sentry.issues.action_log import SYSTEM_ACTOR, action_context_scope
+except ImportError:  # Older Sentry records no action log.
+    SYSTEM_ACTOR = action_context_scope = None
 
 from .identity import log_failure
 from .utils import parse_issue_key
@@ -281,6 +286,17 @@ class GiteaIssueSync(IssueSyncIntegration):
             if sorted(str(c).casefold() for c in current) != [d.casefold() for d in desired]:
                 client.update_issue(number, repo=path, assignees=desired)
 
+    def _action_context(self) -> AbstractContextManager[None]:
+        """Attribute inbound (de)assignments to this integration, as Sentry's own sync does.
+
+        The webhook request carries no action context, and without one Sentry logs
+        "publish_action_from_context called without ActionContext" for every assignment
+        Activity and records it with source "unknown".
+        """
+        if action_context_scope is None:
+            return nullcontext()
+        return action_context_scope(source=self.model.provider, actor=SYSTEM_ACTOR)
+
     def sync_assignee_inbound(self, key: str) -> None:
         """Handle a Gitea `assigned`/`unassigned` delivery for this organization only."""
         if not self.should_sync("inbound_assignee") or not self._hook_installed(key):
@@ -305,8 +321,9 @@ class GiteaIssueSync(IssueSyncIntegration):
                 raise IntegrationError("Gitea returned invalid assignees.")
         source = AssignmentSource.from_integration(self.model)
         if not assignees:
-            for group in groups:
-                GroupAssignee.objects.deassign(group, assignment_source=source)
+            with self._action_context():
+                for group in groups:
+                    GroupAssignee.objects.deassign(group, assignment_source=source)
             return
         by_login: dict[str, list[str]] = {}
         for email, login in self._mappings().items():
@@ -334,7 +351,8 @@ class GiteaIssueSync(IssueSyncIntegration):
                 if eligible:
                     # Several emails may map to one login: keep the current one if it is among them.
                     user = next((u for u in eligible if u.id == current), eligible[0])
-                    GroupAssignee.objects.assign(group, user, assignment_source=source)
+                    with self._action_context():
+                        GroupAssignee.objects.assign(group, user, assignment_source=source)
                     break
             else:
                 logger.info(

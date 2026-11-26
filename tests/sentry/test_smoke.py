@@ -31,7 +31,7 @@ def test_plugins_discovered_from_installed_entry_points(slug, plugin_class) -> N
     module, _, name = plugin_class.rpartition(".")
     plugin = plugins.get(slug)
     assert isinstance(plugin, getattr(importlib.import_module(module), name))
-    assert plugin.version == __version__ == "0.3.0"
+    assert plugin.version == __version__ == "0.3.1"
     assert (plugin.author, plugin.author_url) == (AUTHOR, PROJECT_URL)
     assert ("Source", PROJECT_URL) in plugin.resource_links
     assert ("Bug Tracker", ISSUES_URL) in plugin.resource_links
